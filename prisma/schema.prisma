@@ -1,0 +1,195 @@
+generator client {
+  provider      = "prisma-client-js"
+  output        = "../src/generated/prisma"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider  = "sqlite"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  passwordHash   String
+  name           String
+  role           String   // "BUILDER_ADMIN" | "HOMEOWNER" | "SUBCONTRACTOR"
+  tradeSpecialty String?
+  projectId      String?
+  project        Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+}
+
+model Project {
+  id                   String              @id @default(cuid())
+  name                 String
+  clientName           String
+  clientEmail          String
+  siteAddress          String
+  targetOccupancyDate  DateTime
+  totalAllowanceBudget Float               @default(185000)
+  floorPlanUrl         String?
+  magicAccessToken     String              @unique
+  isTemplate           Boolean             @default(false)
+
+  // Structural & MEP Assembly Baselines
+  envelopeWallSystem   String              @default("Nuform ConForm 8-inch Insulated Form (CF8i)")
+  interiorFramingType  String              @default("2x4 Light-Gauge Metal Framing")
+  framingWoodDelta     Float               @default(-4850)
+  hvacPrimaryHeat      String              @default("Hydronic Radiant Concrete Slab")
+  hvacCoolingSystem    String              @default("Air-Source Heat Pump")
+  hvacVentilationIaq   String              @default("ERV + Whole-House Dehumidifier + MERV-13/HEPA")
+
+  users                User[]
+  rooms                Room[]
+  openings             WindowDoorOpening[]
+  selections           SelectionItem[]
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+}
+
+model Room {
+  id                    String              @id @default(cuid())
+  projectId             String
+  project               Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name                  String
+  floorLevel            String              @default("Main Level")
+  lengthFt              Float
+  widthFt               Float
+  ceilingHeightFt       Float               @default(10)
+  floorAreaSqFt         Float
+  perimeterLinFt        Float
+  netWallAreaSqFt       Float
+  pinX                  Float               @default(50)
+  pinY                  Float               @default(50)
+  gridX                 Float               @default(0)
+  gridZ                 Float               @default(0)
+
+  // Wall boundary & finish rules
+  hasExteriorCF8iWall   Boolean             @default(true)
+  hasGarageFireWall     Boolean             @default(false)
+  interiorPartitionSqFt Float               @default(0)
+  cf8iInteriorFinish    String              @default("Furred Drywall + Paint")
+  hasRadiantSlab        Boolean             @default(true)
+
+  openings              WindowDoorOpening[]
+  selections            SelectionItem[]
+}
+
+model WindowDoorOpening {
+  id               String   @id @default(cuid())
+  projectId        String
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  roomId           String
+  room             Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  openingTag       String
+  openingType      String
+  widthInches      Float
+  heightInches     Float
+  sillHeightInches Float    @default(36)
+  manufacturer     String
+  modelSku         String
+  exteriorColor    String
+  interiorColor    String
+  glassSpec        String
+  jambDepthInches  Float    @default(8.375)
+  fireRating       String   @default("Standard")
+  notes            String?
+}
+
+model TradeCategory {
+  id                   String          @id @default(cuid())
+  name                 String
+  slug                 String          @unique
+  defaultLeadTimeWeeks Int             @default(4)
+  sortOrder            Int             @default(0)
+  selections           SelectionItem[]
+}
+
+model SelectionItem {
+  id                     String             @id @default(cuid())
+  projectId              String
+  project                Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  roomId                 String
+  room                   Room               @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tradeCategoryId        String
+  tradeCategory          TradeCategory      @relation(fields: [tradeCategoryId], references: [id])
+
+  phaseGateway           String
+  parentItemId           String?
+  parentItem             SelectionItem?     @relation("PairedComponents", fields: [parentItemId], references: [id], onDelete: SetNull)
+  pairedChildren         SelectionItem[]    @relation("PairedComponents")
+
+  status                 String             @default("Pending Client Input")
+  isOwnerFurnished       Boolean            @default(false)
+
+  // Technical & Product Specs
+  componentName          String
+  manufacturer           String             @default("TBD")
+  productName            String             @default("Allowance Placeholder")
+  sku                    String             @default("TBD")
+  colorName              String             @default("TBD")
+  colorCode              String             @default("")
+  colorHex               String             @default("#CBD5E1")
+  finish                 String             @default("Standard")
+  productUrl             String?
+  swatchImageUrl         String?
+  mountingHeight         String?
+  isRadiantFloorApproved Boolean            @default(true)
+  switchGroup            String?
+  dimmerType             String?
+  colorTempKelvin        Int?
+  installNotes           String?
+
+  // Schedule & Lead-Time Tracking
+  leadTimeWeeks          Int                @default(4)
+  targetInstallDate      DateTime
+
+  // Takeoff & Allowance Pricing
+  unitType               String             @default("each")
+  takeoffQty             Float              @default(1)
+  wasteFactorPct         Float              @default(0)
+  unitCost               Float              @default(0)
+  allowanceAmount        Float              @default(0)
+
+  // Approval & Lock Metadata
+  approvedByInitials     String?
+  approvedAt             DateTime?
+  builderOverrideNote    String?
+
+  comments               SelectionComment[]
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+}
+
+model SelectionComment {
+  id              String        @id @default(cuid())
+  selectionItemId String
+  selectionItem   SelectionItem @relation(fields: [selectionItemId], references: [id], onDelete: Cascade)
+  authorName      String
+  authorRole      String
+  body            String
+  attachmentUrl   String?
+  createdAt       DateTime      @default(now())
+}
+
+model CatalogPreset {
+  id                     String  @id @default(cuid())
+  tradeSlug              String
+  componentType          String
+  manufacturer           String
+  productName            String
+  sku                    String
+  colorName              String
+  colorCode              String
+  colorHex               String
+  finish                 String
+  unitType               String
+  unitCost               Float
+  leadTimeWeeks          Int
+  isRadiantFloorApproved Boolean @default(true)
+  colorTempKelvin        Int?
+  installNotes           String?
+}
