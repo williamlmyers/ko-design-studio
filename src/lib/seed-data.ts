@@ -1,79 +1,116 @@
 import { prisma } from "./prisma";
 import { calculateRoomMetrics, computeCF8iJambDepth } from "./construction-rules";
 
-export async function seedDatabase() {
-  // 1. Seed Trade Categories
-  const tradeDefinitions = [
-    {
-      name: "Concrete / Nuform CF8i Shell & Exterior Trim",
-      slug: "concrete-nuform-cf8i",
-      defaultLeadTimeWeeks: 4,
-      sortOrder: 1,
-    },
-    {
-      name: "Interior Framing (2x4 Metal/Wood) & Drywall",
-      slug: "framing-drywall",
-      defaultLeadTimeWeeks: 3,
-      sortOrder: 2,
-    },
-    {
-      name: "Windows, Exterior Doors, Trim & Hardware",
-      slug: "windows-doors-trim",
-      defaultLeadTimeWeeks: 8,
-      sortOrder: 3,
-    },
-    {
-      name: "Plumbing Fixtures & Hydronic Radiant",
-      slug: "plumbing-hydronic",
-      defaultLeadTimeWeeks: 5,
-      sortOrder: 4,
-    },
-    {
-      name: "HVAC & Indoor Air Quality (ERV / Heat Pump)",
-      slug: "hvac-iaq",
-      defaultLeadTimeWeeks: 5,
-      sortOrder: 5,
-    },
-    {
-      name: "Electrical, Architectural Lighting & Low-Voltage",
-      slug: "electrical-lighting",
-      defaultLeadTimeWeeks: 4,
-      sortOrder: 6,
-    },
-    {
-      name: "Cabinetry & Architectural Millwork",
-      slug: "cabinetry-millwork",
-      defaultLeadTimeWeeks: 10,
-      sortOrder: 7,
-    },
-    {
-      name: "Countertops & Stone Fabrication",
-      slug: "countertops-stone",
-      defaultLeadTimeWeeks: 4,
-      sortOrder: 8,
-    },
-    {
-      name: "Flooring & Ceramic/Porcelain Tile",
-      slug: "flooring-tile",
-      defaultLeadTimeWeeks: 4,
-      sortOrder: 9,
-    },
-    {
-      name: "Paint & Wall Coatings",
-      slug: "paint-finishes",
-      defaultLeadTimeWeeks: 2,
-      sortOrder: 10,
-    },
-    {
-      name: "Appliances",
-      slug: "appliances",
-      defaultLeadTimeWeeks: 8,
-      sortOrder: 11,
-    },
-  ];
+export const TRADE_DEFINITIONS = [
+  {
+    name: "Concrete / Nuform CF8i Shell & Exterior Trim",
+    slug: "concrete-nuform-cf8i",
+    defaultLeadTimeWeeks: 4,
+    sortOrder: 1,
+  },
+  {
+    name: "Interior Framing (2x4 Metal/Wood) & Drywall",
+    slug: "framing-drywall",
+    defaultLeadTimeWeeks: 3,
+    sortOrder: 2,
+  },
+  {
+    name: "Windows, Exterior Doors, Trim & Hardware",
+    slug: "windows-doors-trim",
+    defaultLeadTimeWeeks: 8,
+    sortOrder: 3,
+  },
+  {
+    name: "Plumbing Fixtures",
+    slug: "plumbing-fixtures",
+    defaultLeadTimeWeeks: 5,
+    sortOrder: 4,
+  },
+  {
+    name: "Hydronic Radiant",
+    slug: "hydronic-radiant",
+    defaultLeadTimeWeeks: 4,
+    sortOrder: 5,
+  },
+  {
+    name: "HVAC & Indoor Air Quality (ERV / Heat Pump)",
+    slug: "hvac-iaq",
+    defaultLeadTimeWeeks: 5,
+    sortOrder: 6,
+  },
+  {
+    name: "Electrical, Architectural Lighting & Low-Voltage",
+    slug: "electrical-lighting",
+    defaultLeadTimeWeeks: 4,
+    sortOrder: 7,
+  },
+  {
+    name: "Cabinetry & Architectural Millwork",
+    slug: "cabinetry-millwork",
+    defaultLeadTimeWeeks: 10,
+    sortOrder: 8,
+  },
+  {
+    name: "Countertops & Stone Fabrication",
+    slug: "countertops-stone",
+    defaultLeadTimeWeeks: 4,
+    sortOrder: 9,
+  },
+  {
+    name: "Flooring & Ceramic/Porcelain Tile",
+    slug: "flooring-tile",
+    defaultLeadTimeWeeks: 4,
+    sortOrder: 10,
+  },
+  {
+    name: "Paint & Wall Coatings",
+    slug: "paint-finishes",
+    defaultLeadTimeWeeks: 2,
+    sortOrder: 11,
+  },
+  {
+    name: "Appliances",
+    slug: "appliances",
+    defaultLeadTimeWeeks: 8,
+    sortOrder: 12,
+  },
+];
 
+export function isHydronicRadiantSelection(item: {
+  componentName?: string | null;
+  productName?: string | null;
+  manufacturer?: string | null;
+  sku?: string | null;
+  installNotes?: string | null;
+}): boolean {
+  const combined = `${item.componentName || ""} ${item.productName || ""} ${
+    item.manufacturer || ""
+  } ${item.sku || ""} ${item.installNotes || ""}`.toLowerCase();
+
+  return (
+    combined.includes("radiant") ||
+    combined.includes("hydronic") ||
+    combined.includes("manifold") ||
+    combined.includes("hepex") ||
+    combined.includes("pex-a loop") ||
+    combined.includes("slab loop") ||
+    combined.includes("uponor") ||
+    combined.includes("lochinvar") ||
+    combined.includes("combi boiler") ||
+    combined.includes("thermistor") ||
+    combined.includes("truflow")
+  );
+}
+
+/**
+ * Non-destructively migrates any legacy combined `plumbing-hydronic` / `plumbing-radiant`
+ * TradeCategory & SelectionItem records into the two split trades:
+ * - `plumbing-fixtures` ("Plumbing Fixtures")
+ * - `hydronic-radiant` ("Hydronic Radiant")
+ */
+export async function ensureSplitPlumbingAndRadiantTrades() {
   const tradeMap: Record<string, string> = {};
-  for (const t of tradeDefinitions) {
+  for (const t of TRADE_DEFINITIONS) {
     const saved = await prisma.tradeCategory.upsert({
       where: { slug: t.slug },
       update: {
@@ -85,6 +122,59 @@ export async function seedDatabase() {
     });
     tradeMap[t.slug] = saved.id;
   }
+
+  const legacyTrades = await prisma.tradeCategory.findMany({
+    where: {
+      slug: { in: ["plumbing-hydronic", "plumbing-radiant"] },
+    },
+  });
+
+  for (const legacy of legacyTrades) {
+    const legacyItems = await prisma.selectionItem.findMany({
+      where: { tradeCategoryId: legacy.id },
+    });
+
+    for (const item of legacyItems) {
+      const targetSlug = isHydronicRadiantSelection(item)
+        ? "hydronic-radiant"
+        : "plumbing-fixtures";
+      await prisma.selectionItem.update({
+        where: { id: item.id },
+        data: { tradeCategoryId: tradeMap[targetSlug] },
+      });
+    }
+
+    await prisma.tradeCategory.delete({
+      where: { id: legacy.id },
+    });
+  }
+
+  // Also migrate any CatalogPreset rows still referencing `plumbing-hydronic`
+  const legacyPresets = await prisma.catalogPreset.findMany({
+    where: { tradeSlug: { in: ["plumbing-hydronic", "plumbing-radiant"] } },
+  });
+  for (const preset of legacyPresets) {
+    const targetSlug = isHydronicRadiantSelection({
+      componentName: preset.componentType,
+      productName: preset.productName,
+      manufacturer: preset.manufacturer,
+      sku: preset.sku,
+      installNotes: preset.installNotes,
+    })
+      ? "hydronic-radiant"
+      : "plumbing-fixtures";
+    await prisma.catalogPreset.update({
+      where: { id: preset.id },
+      data: { tradeSlug: targetSlug },
+    });
+  }
+
+  return tradeMap;
+}
+
+export async function seedDatabase() {
+  // 1. Seed Trade Categories (12 distinct trades including split Plumbing Fixtures & Hydronic Radiant)
+  const tradeMap = await ensureSplitPlumbingAndRadiantTrades();
 
   // 2. Seed Master Catalog Presets
   await prisma.catalogPreset.deleteMany({});
@@ -175,7 +265,7 @@ export async function seedDatabase() {
         installNotes: "HVLP fine-finish spray on interior doors, island millwork, and mudroom lockers.",
       },
       {
-        tradeSlug: "plumbing-hydronic",
+        tradeSlug: "plumbing-fixtures",
         componentType: "Thermostatic Shower Trim Kit",
         manufacturer: "Brizo",
         productName: "Odin TempAssure 17T Dual-Function Trim",
@@ -190,6 +280,23 @@ export async function seedDatabase() {
         isRadiantFloorApproved: true,
         installNotes:
           "Requires paired MultiChoice Universal Rough-In Valve (R60000-UNBX) mounted at 48\" AFF in 2x4 stud bay.",
+      },
+      {
+        tradeSlug: "hydronic-radiant",
+        componentType: "Oxygen-Barrier PEX-a Hydronic Slab Loop Kit",
+        manufacturer: "Uponor",
+        productName: "1/2\" Wirsbo hePEX Radiant Slab Loops @ 9\" O.C. + Sensor Conduit",
+        sku: "UPN-A1140500",
+        colorName: "Red/Blue Oxygen-Barrier PEX",
+        colorCode: "PEX-500",
+        colorHex: "#DC2626",
+        finish: "Embedded in 4\" Concrete Slab over 2\" EPS",
+        unitType: "sq ft",
+        unitCost: 6.5,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        installNotes:
+          "Install continuous R-10 slab-edge thermal break against Nuform CF8i perimeter wall; pressure-test @ 100 PSI during pour.",
       },
       {
         tradeSlug: "countertops-stone",
@@ -227,6 +334,620 @@ export async function seedDatabase() {
     ],
   });
 
+  // 2B. Seed 36 Good / Better / Best Showroom CatalogItem Options across 6 Categories
+  await prisma.catalogItem.deleteMany({});
+  await prisma.catalogItem.createMany({
+    data: [
+      // --- Category 1: Paint (Sherwin-Williams formulas & sheens) ---
+      {
+        category: "Paint",
+        tier: "Good",
+        manufacturer: "Sherwin-Williams",
+        productName: "ProMar 200 Zero VOC Interior Acrylic",
+        sku: "SW-PM200-7008",
+        colorName: "Alabaster",
+        colorCode: "SW 7008",
+        colorHex: "#F2EFE9",
+        finish: "Eggshell",
+        unitType: "sq ft",
+        unitCost: 1.35,
+        leadTimeWeeks: 1,
+        isRadiantFloorApproved: true,
+        notes: "1 coat PVA primer + 2 coats ProMar 200 Zero VOC Eggshell.",
+      },
+      {
+        category: "Paint",
+        tier: "Good",
+        manufacturer: "Sherwin-Williams",
+        productName: "ProMar 200 Zero VOC Interior Acrylic",
+        sku: "SW-PM200-7015",
+        colorName: "Repose Gray",
+        colorCode: "SW 7015",
+        colorHex: "#CCC9C0",
+        finish: "Eggshell",
+        unitType: "sq ft",
+        unitCost: 1.35,
+        leadTimeWeeks: 1,
+        isRadiantFloorApproved: true,
+        notes: "Neutral warm-gray wall coating for bedrooms and hallways.",
+      },
+      {
+        category: "Paint",
+        tier: "Better",
+        manufacturer: "Sherwin-Williams",
+        productName: "Duration Home Washable Acrylic Latex",
+        sku: "SW-DUR-7005",
+        colorName: "Pure White",
+        colorCode: "SW 7005",
+        colorHex: "#F4F4F0",
+        finish: "Matte Washable",
+        unitType: "sq ft",
+        unitCost: 1.65,
+        leadTimeWeeks: 1,
+        isRadiantFloorApproved: true,
+        notes: "High-scrub moisture-resistant matte formula for active living zones.",
+      },
+      {
+        category: "Paint",
+        tier: "Better",
+        manufacturer: "Sherwin-Williams",
+        productName: "Duration Home Washable Acrylic Latex",
+        sku: "SW-DUR-7029",
+        colorName: "Agreeable Gray",
+        colorCode: "SW 7029",
+        colorHex: "#D1CBC1",
+        finish: "Satin",
+        unitType: "sq ft",
+        unitCost: 1.65,
+        leadTimeWeeks: 1,
+        isRadiantFloorApproved: true,
+        notes: "Moisture-blocking satin finish ideal for baths and laundry.",
+      },
+      {
+        category: "Paint",
+        tier: "Best",
+        manufacturer: "Sherwin-Williams",
+        productName: "Emerald Interior Acrylic Latex",
+        sku: "SW-EMR-7008",
+        colorName: "Alabaster",
+        colorCode: "SW 7008",
+        colorHex: "#F2EFE9",
+        finish: "Cashmere Matte",
+        unitType: "sq ft",
+        unitCost: 1.95,
+        leadTimeWeeks: 1,
+        isRadiantFloorApproved: true,
+        notes: "KO Builders signature washable architectural matte wall finish.",
+      },
+      {
+        category: "Paint",
+        tier: "Best",
+        manufacturer: "Sherwin-Williams",
+        productName: "Emerald Urethane Trim & Millwork Enamel",
+        sku: "SW-EMR-7069",
+        colorName: "Iron Ore",
+        colorCode: "SW 7069",
+        colorHex: "#434341",
+        finish: "Satin Urethane Enamel",
+        unitType: "sq ft",
+        unitCost: 2.45,
+        leadTimeWeeks: 1,
+        isRadiantFloorApproved: true,
+        notes: "HVLP fine-finish spray on interior doors, mudroom lockers, and island.",
+      },
+
+      // --- Category 2: Radiant-Approved Flooring & Tile ---
+      {
+        category: "Radiant-Approved Flooring & Tile",
+        tier: "Good",
+        manufacturer: "COREtec Pro",
+        productName: "Cairo Oak 7\" Stone-Polymer Core LVP",
+        sku: "CT-PRO-CAIRO7",
+        colorName: "Warm Honey Oak",
+        colorCode: "CT-884",
+        colorHex: "#D2B896",
+        finish: "Embossed Matte",
+        unitType: "sq ft",
+        unitCost: 6.5,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "Low R-0.25 thermal resistance; 100% waterproof over hydronic slabs.",
+      },
+      {
+        category: "Radiant-Approved Flooring & Tile",
+        tier: "Good",
+        manufacturer: "Daltile",
+        productName: "packager Continental Slate 12x24 Porcelain",
+        sku: "DAL-CS1224-GRY",
+        colorName: "ash Slate Gray",
+        colorCode: "DAL-42",
+        colorHex: "#94A3B8",
+        finish: "Textured Matte",
+        unitType: "sq ft",
+        unitCost: 6.95,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "High thermal conductivity porcelain tile for mudroom and laundry.",
+      },
+      {
+        category: "Radiant-Approved Flooring & Tile",
+        tier: "Better",
+        manufacturer: "Atlas Concorde",
+        productName: "Boost Stone Ivory 24x48 Rectified Porcelain",
+        sku: "AC-BST-IV2448",
+        colorName: "Limestone Ivory",
+        colorCode: "AC-IV24",
+        colorHex: "#DCD7CC",
+        finish: "Matte R10 Slip-Resistant",
+        unitType: "sq ft",
+        unitCost: 9.75,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        notes: "Install over Schluter DITRA-HEAT uncoupling membrane with 1/8\" grout joints.",
+      },
+      {
+        category: "Radiant-Approved Flooring & Tile",
+        tier: "Better",
+        manufacturer: "Shaw Floorte Pro",
+        productName: "Paladin Plus 9\" Wide Plank SPC",
+        sku: "SHW-PAL-902",
+        colorName: "Coastal Driftwood",
+        colorCode: "CD-902",
+        colorHex: "#C7B8A1",
+        finish: "Wire-Brushed Matte",
+        unitType: "sq ft",
+        unitCost: 8.25,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        notes: "Radiant-certified up to 85°F slab temperature.",
+      },
+      {
+        category: "Radiant-Approved Flooring & Tile",
+        tier: "Best",
+        manufacturer: "Kährs Sweden",
+        productName: "Oak Nouveau Snow 7-7/8\" Engineered Plank",
+        sku: "KAHRS-153N38EK09KW",
+        colorName: "Nordic Warm White Oak",
+        colorCode: "NW-104",
+        colorHex: "#E6DAC8",
+        finish: "Ultra-Matte Brushed Lacquer",
+        unitType: "sq ft",
+        unitCost: 11.5,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        notes: "Multi-layer cross-laminated Baltic birch core certified for hydronic slabs; glue-down with Bona R851.",
+      },
+      {
+        category: "Radiant-Approved Flooring & Tile",
+        tier: "Best",
+        manufacturer: "Porcelanosa",
+        productName: "Calacatta Gold 48x48 Rectified Large-Format Slab",
+        sku: "POR-CAL-4848G",
+        colorName: "Calacatta Warm Gold Vein",
+        colorCode: "CG-48",
+        colorHex: "#F3EFEA",
+        finish: "Silk Honed",
+        unitType: "sq ft",
+        unitCost: 14.8,
+        leadTimeWeeks: 5,
+        isRadiantFloorApproved: true,
+        notes: "Zero-lippage leveling clip installation over hydronic radiant wet-zone slab.",
+      },
+
+      // --- Category 3: Plumbing Fixtures (Kohler / Delta / Brizo) ---
+      {
+        category: "Plumbing Fixtures",
+        tier: "Good",
+        manufacturer: "Delta",
+        productName: "Trinsic Monitor 14 Series Shower Trim Package",
+        sku: "DLT-T14259-BL",
+        colorName: "Matte Black",
+        colorCode: "BL",
+        colorHex: "#1E293B",
+        finish: "Matte Black Powder Coat",
+        unitType: "each",
+        unitCost: 395,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "R10000-UNBX",
+        pairedRoughInName: "Delta MultiChoice Universal Rough-In Valve Body",
+        notes: "Pressure-balance cartridge; auto-pairs with Phase 2 Delta R10000-UNBX rough valve.",
+      },
+      {
+        category: "Plumbing Fixtures",
+        tier: "Good",
+        manufacturer: "Kohler",
+        productName: "Highline Arc Comfort Height Elongated Toilet",
+        sku: "K-5310-0",
+        colorName: "Vitreous White",
+        colorCode: "WHT-0",
+        colorHex: "#F8FAFC",
+        finish: "Glazed Vitreous China",
+        unitType: "each",
+        unitCost: 420,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "Use waxless neoprene flange seal over hydronic radiant concrete floors.",
+      },
+      {
+        category: "Plumbing Fixtures",
+        tier: "Better",
+        manufacturer: "Kohler",
+        productName: "Purist Rite-Temp Shower Trim & Shift Handshower",
+        sku: "K-TS14422-4-BV",
+        colorName: "Vibrant Brushed Bronze",
+        colorCode: "BV",
+        colorHex: "#B89758",
+        finish: "PVD Brushed Bronze",
+        unitType: "each",
+        unitCost: 845,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "K-8304-K-NA",
+        pairedRoughInName: "Kohler Rite-Temp Pressure-Balance Rough-In Valve & Cartridge",
+        notes: "Requires Phase 2 Kohler K-8304-K-NA valve body mounted at 48\" AFF.",
+      },
+      {
+        category: "Plumbing Fixtures",
+        tier: "Better",
+        manufacturer: "Delta",
+        productName: "Broderick Pro Spring Pull-Down Kitchen Faucet",
+        sku: "DLT-9190-AR-DST",
+        colorName: "Arctic Stainless",
+        colorCode: "AR",
+        colorHex: "#CBD5E1",
+        finish: "Brushed Arctic Stainless",
+        unitType: "each",
+        unitCost: 625,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        notes: "Includes ShieldSpray technology and integrated PEX supply lines.",
+      },
+      {
+        category: "Plumbing Fixtures",
+        tier: "Best",
+        manufacturer: "Brizo",
+        productName: "Odin TempAssure 17T Thermostatic Trim + 12\" Raincan",
+        sku: "T60P975-LHP-GL",
+        colorName: "Brushed Luxe Gold",
+        colorCode: "GL",
+        colorHex: "#C5A059",
+        finish: "Brushed Luxe Gold PVD",
+        unitType: "each",
+        unitCost: 1640,
+        leadTimeWeeks: 5,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "R60000-UNBXHF",
+        pairedRoughInName: "Brizo MultiChoice High-Flow Rough-In Valve + 3-Way Diverter",
+        notes: "Thermostatic dual-function trim; auto-links Phase 2 R60000-UNBXHF rough valve.",
+      },
+      {
+        category: "Plumbing Fixtures",
+        tier: "Best",
+        manufacturer: "Brizo",
+        productName: "Litze Articulating Bridge Kitchen Faucet w/ Knurled Handle",
+        sku: "BRZ-64043LF-GL",
+        colorName: "Brushed Luxe Gold",
+        colorCode: "GL",
+        colorHex: "#C5A059",
+        finish: "Brushed Luxe Gold PVD",
+        unitType: "each",
+        unitCost: 1290,
+        leadTimeWeeks: 5,
+        isRadiantFloorApproved: true,
+        notes: "CNC 2-hole countertop drilling template required for Cambria fabricator.",
+      },
+
+      // --- Category 4: Lighting (2700K/3000K architectural recessed cans & pendants) ---
+      {
+        category: "Lighting",
+        tier: "Good",
+        manufacturer: "Halo Cooper Lighting",
+        productName: "RL4 4\" Selectable 2700K/3000K LED Baffle Downlight",
+        sku: "HALO-RL4069S1EWH",
+        colorName: "Matte White Baffle",
+        colorCode: "MW-3000K",
+        colorHex: "#F8FAFC",
+        finish: "Matte White",
+        unitType: "each",
+        unitCost: 68,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "HALO-H99ICAT",
+        pairedRoughInName: "Halo H99ICAT 4\" IC Airtight New-Construction Recessed Housing",
+        notes: "Set DIP switch to 3000K in kitchens/baths and 2700K in bedrooms.",
+      },
+      {
+        category: "Lighting",
+        tier: "Good",
+        manufacturer: "Generation Lighting",
+        productName: "Feiss Hobnail Glass Mini Island Pendant (3000K LED)",
+        sku: "GEN-P1284BS",
+        colorName: "Brushed Steel & Clear Glass",
+        colorCode: "BS-30K",
+        colorHex: "#CBD5E1",
+        finish: "Brushed Steel",
+        unitType: "each",
+        unitCost: 245,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        notes: "Includes 3x 12\" and 1x 6\" downrods for 10'-0\" kitchen ceiling.",
+      },
+      {
+        category: "Lighting",
+        tier: "Better",
+        manufacturer: "DMF Lighting",
+        productName: "Artafex 4\" Flangeless Warm-Dim (3000K-1800K) LED Module",
+        sku: "DMF-DRD2M10930",
+        colorName: "Architectural Matte White",
+        colorCode: "WHT-WD",
+        colorHex: "#F1F5F9",
+        finish: "Mud-In Flangeless Trim",
+        unitType: "each",
+        unitCost: 210,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "DMF-M2400ICAT-MUD",
+        pairedRoughInName: "DMF Fire-Rated Airtight IC Housing + Flangeless Mud Plate",
+        notes: "93+ CRI Warm-Dim LED; Phase 2 mud plate must be taped by drywall crew.",
+      },
+      {
+        category: "Lighting",
+        tier: "Better",
+        manufacturer: "Kuzco Lighting",
+        productName: "Magellan 54\" Linear Architectural LED Island Suspension (3000K)",
+        sku: "KUZ-LP9054-BG",
+        colorName: "Brushed Gold",
+        colorCode: "BG-3000K",
+        colorHex: "#D4AF37",
+        finish: "Anodized Brushed Gold",
+        unitType: "each",
+        unitCost: 680,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        notes: "ELV dimmable via Lutron Caséta Diva smart dimmer.",
+      },
+      {
+        category: "Lighting",
+        tier: "Best",
+        manufacturer: "Tech Lighting / Visual Comfort",
+        productName: "Element 3\" Adjustable 2700K Architectural Gimbal Downlight",
+        sku: "TECH-E3RF-LH927",
+        colorName: "Matte Black Interior Bezel / White Flange",
+        colorCode: "BLK-2700K",
+        colorHex: "#1E293B",
+        finish: "Zero-Glare Black Alzak Baffle",
+        unitType: "each",
+        unitCost: 365,
+        leadTimeWeeks: 5,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "TECH-E3-ICAT-BOX",
+        pairedRoughInName: "Element 3\" Low-Profile Airtight IC New-Construction Housing",
+        notes: "1% Lutron Hi-lume EcoSystem driver; aim 30° at artwork and stone fireplace.",
+      },
+      {
+        category: "Lighting",
+        tier: "Best",
+        manufacturer: "Visual Comfort & Co.",
+        productName: "Kelly Wearstler Rousseau Grande Articulating Pendant (2700K)",
+        sku: "VC-KW5515HAB-CG",
+        colorName: "Hand-Rubbed Antique Brass & Fluted Glass",
+        colorCode: "HAB-2700K",
+        colorHex: "#C8A15A",
+        finish: "Hand-Rubbed Antique Brass",
+        unitType: "each",
+        unitCost: 890,
+        leadTimeWeeks: 6,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "LUT-PD-5NE-WH",
+        pairedRoughInName: "Lutron Caséta ELV+ Phase-Adaptive Smart Dimmer Rough-In",
+        notes: "Mount bottom of globe @ 68\" AFF over waterfall quartz island.",
+      },
+
+      // --- Category 5: Door/Cabinet Hardware ---
+      {
+        category: "Door/Cabinet Hardware",
+        tier: "Good",
+        manufacturer: "Schlage",
+        productName: "Latitude Lever w/ Century Rectangular Rose",
+        sku: "SCH-F40-LAT-622",
+        colorName: "Matte Black",
+        colorCode: "622",
+        colorHex: "#1E293B",
+        finish: "Powder-Coated Matte Black",
+        unitType: "each",
+        unitCost: 58,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "Heavy-duty chassis for 1-3/4\" solid-core interior doors.",
+      },
+      {
+        category: "Door/Cabinet Hardware",
+        tier: "Good",
+        manufacturer: "Amerock",
+        productName: "Blackrock 6-5/16\" Center-to-Center Cabinet Pull",
+        sku: "AMR-BP55278MB",
+        colorName: "Matte Black",
+        colorCode: "MB",
+        colorHex: "#1E293B",
+        finish: "Matte Black",
+        unitType: "each",
+        unitCost: 14,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "Includes 1\" and 1-1/2\" M4 machine screws for drawer fronts.",
+      },
+      {
+        category: "Door/Cabinet Hardware",
+        tier: "Better",
+        manufacturer: "Baldwin",
+        productName: "Reserve Contemporary Square Lever Set",
+        sku: "BLD-R051-150",
+        colorName: "Satin Brass",
+        colorCode: "044",
+        colorHex: "#C5A059",
+        finish: "Solid Forged Satin Brass",
+        unitType: "each",
+        unitCost: 165,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        notes: "Concealed fastener rose; 28-degree short-throw latch.",
+      },
+      {
+        category: "Door/Cabinet Hardware",
+        tier: "Better",
+        manufacturer: "Top Knobs",
+        productName: "Kinney 8-13/16\" Architectural Bar Pull",
+        sku: "TK-M2219-HB",
+        colorName: "Honey Bronze",
+        colorCode: "HB",
+        colorHex: "#C69C6D",
+        finish: "Brushed Honey Bronze",
+        unitType: "each",
+        unitCost: 32,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        notes: "Coordinates with Brizo Luxe Gold and Kohler Brushed Bronze.",
+      },
+      {
+        category: "Door/Cabinet Hardware",
+        tier: "Best",
+        manufacturer: "Emtek",
+        productName: "Select Knurled L-Square Lever w/ Disk Rose",
+        sku: "EMT-8468-KNUS4",
+        colorName: "Satin Brass & Matte Black Knurl",
+        colorCode: "US4-US19",
+        colorHex: "#C5A059",
+        finish: "PVD Satin Brass / Diamond Knurled Grip",
+        unitType: "each",
+        unitCost: 265,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        notes: "Includes heavy-duty mortise privacy latch for 8'-0\" TruStile solid-core doors.",
+      },
+      {
+        category: "Door/Cabinet Hardware",
+        tier: "Best",
+        manufacturer: "Buster + Punch",
+        productName: "Cross-Knurled Solid Brass 10\" Cabinet Pull Bar",
+        sku: "BP-PULL-BRS-260",
+        colorName: "Machined Solid Brass",
+        colorCode: "BP-BRS",
+        colorHex: "#D4AF37",
+        finish: "Diamond-Cut Cross Knurl w/ Coin Screws",
+        unitType: "each",
+        unitCost: 98,
+        leadTimeWeeks: 5,
+        isRadiantFloorApproved: true,
+        notes: "Precision-machined solid brass; use templating jig on Rift White Oak fronts.",
+      },
+
+      // --- Category 6: HVAC/ERV Linear Diffusers ---
+      {
+        category: "HVAC/ERV Linear Diffusers",
+        tier: "Good",
+        manufacturer: "Accord Ventilation",
+        productName: "Architectural Louvered Steel Ceiling Register",
+        sku: "ACC-LVR-1206W",
+        colorName: "Powder-Coated White",
+        colorCode: "WHT-01",
+        colorHex: "#F8FAFC",
+        finish: "Matte White",
+        unitType: "each",
+        unitCost: 48,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "Multi-shutter damper for air-source heat pump supply boots.",
+      },
+      {
+        category: "HVAC/ERV Linear Diffusers",
+        tier: "Good",
+        manufacturer: "Broan-NuTone",
+        productName: "UltraGreen Fresh-Air ERV Balance Grille",
+        sku: "BRN-ERV-GRL6",
+        colorName: "Matte White",
+        colorCode: "MW-6",
+        colorHex: "#F1F5F9",
+        finish: "Polymer White",
+        unitType: "each",
+        unitCost: 65,
+        leadTimeWeeks: 2,
+        isRadiantFloorApproved: true,
+        notes: "Connects to 6\" insulated ERV fresh-air trunk.",
+      },
+      {
+        category: "HVAC/ERV Linear Diffusers",
+        tier: "Better",
+        manufacturer: "Reggio Register",
+        productName: "Modern Linear Bar Supply/Return Grille (Laser-Cut Aluminum)",
+        sku: "REG-MOD-1406W",
+        colorName: "Architectural White",
+        colorCode: "REG-WHT",
+        colorHex: "#F8FAFC",
+        finish: "Anodized Matte White",
+        unitType: "each",
+        unitCost: 165,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        notes: "Concealed magnetic mounting clips for flush ceiling/wall alignment.",
+      },
+      {
+        category: "HVAC/ERV Linear Diffusers",
+        tier: "Better",
+        manufacturer: "Zehnder America",
+        productName: "ComfoGrid Designer Flush ERV Fresh-Air Supply/Exhaust Valve",
+        sku: "ZEH-COMFOGRID-125",
+        colorName: "RAL 9016 Traffic White",
+        colorCode: "RAL-9016",
+        colorHex: "#F8FAFC",
+        finish: "Flush Powder-Coated Steel",
+        unitType: "each",
+        unitCost: 195,
+        leadTimeWeeks: 4,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "ZEH-CLD-BOX-125",
+        pairedRoughInName: "Zehnder Sound-Attenuating 90° ERV Ceiling Plenum Boot",
+        notes: "Silent Coanda-effect fresh air delivery; requires Phase 2 ZEH-CLD-BOX-125 boot.",
+      },
+      {
+        category: "HVAC/ERV Linear Diffusers",
+        tier: "Best",
+        manufacturer: "Titus HVAC",
+        productName: "FlowBar FLB-2S-48 Frameless Mud-In 2-Slot Architectural Diffuser",
+        sku: "TITUS-FLB-2S-48",
+        colorName: "Matte White Slot w/ Black Deflector Blades",
+        colorCode: "RAL-9016-BLK",
+        colorHex: "#F1F5F9",
+        finish: "Frameless Tape-In Drywall Bead",
+        unitType: "each",
+        unitCost: 340,
+        leadTimeWeeks: 5,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "TITUS-FLB-PLEN48",
+        pairedRoughInName: "Titus FlowBar 48\" Insulated Sheet-Metal Plenum Box (8\" Collar)",
+        notes: "Phase 2 insulated plenum boot must be set before ceiling drywall hang.",
+      },
+      {
+        category: "HVAC/ERV Linear Diffusers",
+        tier: "Best",
+        manufacturer: "tekmar / Watts",
+        productName: "WiFi Smart Radiant Floor + Heat-Pump Thermostat 564",
+        sku: "TEK-564-WIFI",
+        colorName: "Architectural Glass White",
+        colorCode: "TEK-WHT",
+        colorHex: "#F8FAFC",
+        finish: "Flush Glass Touchscreen",
+        unitType: "each",
+        unitCost: 420,
+        leadTimeWeeks: 3,
+        isRadiantFloorApproved: true,
+        pairedRoughInSku: "UPN-A1140500-SENS",
+        pairedRoughInName: "Uponor 10k-Ohm In-Slab Floor Sensor Conduit & Manifold Actuator",
+        notes: "Coordinates hydronic slab temperature and heat-pump cooling stages.",
+      },
+    ],
+  });
+
   // 3. Upsert Primary Seeded Project: JR & Candy Titko Residence (Sunbury, Ohio)
   const existingTitko = await prisma.project.findFirst({
     where: { magicAccessToken: "titko-sunbury-icf-2026" },
@@ -244,7 +965,7 @@ export async function seedDatabase() {
       siteAddress: "7420 Cheshire Rd, Sunbury, OH 43074",
       targetOccupancyDate: new Date("2027-04-15T12:00:00Z"),
       totalAllowanceBudget: 194500,
-      floorPlanUrl: "/titko-floorplan-preview.svg",
+      floorPlanUrl: null,
       magicAccessToken: "titko-sunbury-icf-2026",
       isTemplate: false,
       envelopeWallSystem: "Nuform ConForm 8-inch Insulated Form (CF8i)",
@@ -690,7 +1411,7 @@ export async function seedDatabase() {
     data: {
       projectId: titkoProject.id,
       roomId: roomMap.primaryBath.id,
-      tradeCategoryId: tradeMap["plumbing-hydronic"],
+      tradeCategoryId: tradeMap["plumbing-fixtures"],
       phaseGateway: "Phase 2: Pre-Drywall MEP, HVAC/IAQ & Low-Voltage Rough-In",
       status: "Client Approved & Locked",
       componentName: "Primary Shower Thermostatic Rough-In Valve & 3-Way Diverter Body",
@@ -720,7 +1441,7 @@ export async function seedDatabase() {
     data: {
       projectId: titkoProject.id,
       roomId: roomMap.primaryBath.id,
-      tradeCategoryId: tradeMap["plumbing-hydronic"],
+      tradeCategoryId: tradeMap["plumbing-fixtures"],
       phaseGateway: "Phase 4: Final Trim, Hardware, Grilles & Appliances",
       parentItemId: primaryShowerValve.id,
       status: "Client Approved & Locked",
@@ -752,7 +1473,7 @@ export async function seedDatabase() {
     data: {
       projectId: titkoProject.id,
       roomId: roomMap.greatRoom.id,
-      tradeCategoryId: tradeMap["plumbing-hydronic"],
+      tradeCategoryId: tradeMap["hydronic-radiant"],
       phaseGateway: "Phase 1: Pre-Pour / Slab & Nuform CF8i Embeds",
       status: "Client Approved & Locked",
       componentName: "Hydronic Radiant Concrete Slab PEX-a Loops & In-Slab Thermistor Conduit",
@@ -1323,7 +2044,7 @@ export async function seedDatabase() {
     // Laundry & Craft Utility Studio
     {
       roomKey: "laundry",
-      tradeSlug: "plumbing-hydronic",
+      tradeSlug: "plumbing-fixtures",
       phaseGateway: "Phase 2: Pre-Drywall MEP, HVAC/IAQ & Low-Voltage Rough-In",
       status: "Client Approved & Locked",
       componentName: "Recessed Stainless Washer Box w/ Water-Hammer Arrestors & Floor Drain Trap Primer",
@@ -1377,7 +2098,7 @@ export async function seedDatabase() {
     },
     {
       roomKey: "mechanical",
-      tradeSlug: "plumbing-hydronic",
+      tradeSlug: "hydronic-radiant",
       phaseGateway: "Phase 1: Pre-Pour / Slab & Nuform CF8i Embeds",
       status: "Client Approved & Locked",
       componentName: "6-Zone Stainless Hydronic Radiant Manifold Cabinet & High-Efficiency Combi Boiler",

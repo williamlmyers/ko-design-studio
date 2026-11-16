@@ -99,6 +99,13 @@ model WindowDoorOpening {
   notes            String?
 }
 
+// TradeCategory slugs map 1-to-1 to TradeCategoryEnum:
+// CONCRETE_NUFORM_CF8I ("concrete-nuform-cf8i"), FRAMING_DRYWALL ("framing-drywall"),
+// WINDOWS_DOORS_TRIM ("windows-doors-trim"), PLUMBING_FIXTURES ("plumbing-fixtures"),
+// HYDRONIC_RADIANT ("hydronic-radiant"), HVAC_IAQ ("hvac-iaq"),
+// ELECTRICAL_LIGHTING ("electrical-lighting"), CABINETRY_MILLWORK ("cabinetry-millwork"),
+// COUNTERTOPS_STONE ("countertops-stone"), FLOORING_TILE ("flooring-tile"),
+// PAINT_FINISHES ("paint-finishes"), APPLIANCES ("appliances")
 model TradeCategory {
   id                   String          @id @default(cuid())
   name                 String
@@ -192,4 +199,24 @@ model CatalogPreset {
   isRadiantFloorApproved Boolean @default(true)
   colorTempKelvin        Int?
   installNotes           String?
+}
+
+model CatalogItem {
+  id                     String  @id @default(cuid())
+  category               String
+  tier                   String  // "Good" | "Better" | "Best"
+  manufacturer           String
+  productName            String
+  sku                    String
+  colorName              String
+  colorCode              String
+  colorHex               String
+  finish                 String
+  unitType               String
+  unitCost               Float
+  leadTimeWeeks          Int     @default(4)
+  isRadiantFloorApproved Boolean @default(true)
+  pairedRoughInSku       String?
+  pairedRoughInName      String?
+  notes                  String?
 }

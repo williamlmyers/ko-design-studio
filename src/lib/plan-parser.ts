@@ -379,7 +379,7 @@ export function generateAutoSeedSelectionsForRoom(
     items.push(
       {
         roomId: room.id,
-        tradeCategoryId: tradeMap["plumbing-hydronic"],
+        tradeCategoryId: tradeMap["plumbing-fixtures"] || tradeMap["plumbing-hydronic"],
         phaseGateway: "Phase 2: Pre-Drywall MEP, HVAC/IAQ & Low-Voltage Rough-In",
         status: "Pending Client Input",
         componentName: `${room.name} — Thermostatic Shower Rough-In Valve + Diverter`,

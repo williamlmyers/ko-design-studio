@@ -13,7 +13,9 @@ export default function MasterTakeoffPrintPage({
   const [project, setProject] = useState<any | null>(null);
 
   useEffect(() => {
-    fetch(`/api/projects/${id}?role=BUILDER_ADMIN`)
+    fetch(`/api/projects/${id}?role=BUILDER_ADMIN&_t=${Date.now()}`, {
+      cache: "no-store",
+    })
       .then((r) => r.json())
       .then((d) => setProject(d.project));
   }, [id]);

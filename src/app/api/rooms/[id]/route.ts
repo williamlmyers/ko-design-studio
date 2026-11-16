@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { getSessionUser } from "@/lib/auth";
 import {
   calculateRoomMetrics,
   computeCF8iJambDepth,
+  resolveCascadedTakeoffQty,
 } from "@/lib/construction-rules";
 
 export async function PATCH(
@@ -15,13 +18,20 @@ export async function PATCH(
 
     const existing = await prisma.room.findUnique({
       where: { id },
-      include: { selections: { include: { tradeCategory: true } }, openings: true },
+      include: {
+        selections: { include: { tradeCategory: true } },
+        openings: true,
+      },
     });
 
     if (!existing) {
       return NextResponse.json({ error: "Room not found" }, { status: 404 });
     }
 
+    const updatedName =
+      typeof body.name === "string" && body.name.trim().length > 0
+        ? body.name.trim()
+        : existing.name;
     const lengthFt =
       body.lengthFt !== undefined ? Number(body.lengthFt) : existing.lengthFt;
     const widthFt =
@@ -37,7 +47,7 @@ export async function PATCH(
     const interiorPartitionSqFt =
       body.interiorPartitionSqFt !== undefined
         ? Number(body.interiorPartitionSqFt)
-        : existing.interiorPartitionSqFt;
+        : undefined;
     const hasRadiantSlab =
       body.hasRadiantSlab !== undefined
         ? Boolean(body.hasRadiantSlab)
@@ -50,6 +60,18 @@ export async function PATCH(
       body.hasGarageFireWall !== undefined
         ? Boolean(body.hasGarageFireWall)
         : existing.hasGarageFireWall;
+    const pinX =
+      body.pinX !== undefined
+        ? Math.max(1, Math.min(99, Number(body.pinX)))
+        : existing.pinX;
+    const pinY =
+      body.pinY !== undefined
+        ? Math.max(1, Math.min(99, Number(body.pinY)))
+        : existing.pinY;
+    const gridX =
+      body.gridX !== undefined ? Number(body.gridX) : existing.gridX;
+    const gridZ =
+      body.gridZ !== undefined ? Number(body.gridZ) : existing.gridZ;
 
     const metrics = calculateRoomMetrics({
       lengthFt,
@@ -62,7 +84,7 @@ export async function PATCH(
     const updatedRoom = await prisma.room.update({
       where: { id },
       data: {
-        name: body.name ?? existing.name,
+        name: updatedName,
         lengthFt,
         widthFt,
         ceilingHeightFt,
@@ -74,27 +96,23 @@ export async function PATCH(
         hasRadiantSlab,
         hasExteriorCF8iWall,
         hasGarageFireWall,
+        pinX,
+        pinY,
+        gridX,
+        gridZ,
       },
     });
 
-    // Automatically update room-dimension-driven takeoff quantities for unlocked items
+    // Cascade updated room dimensions (floorArea, perimeter, wallArea) across all area/linear SelectionItem records in this room
+    let cascadedItemsCount = 0;
     for (const sel of existing.selections) {
-      if (sel.status === "Client Approved & Locked") continue;
-      if (sel.unitType === "sq ft") {
-        if (sel.tradeCategory.slug === "flooring-tile") {
-          await prisma.selectionItem.update({
-            where: { id: sel.id },
-            data: { takeoffQty: metrics.floorAreaSqFt },
-          });
-        } else if (
-          sel.tradeCategory.slug === "paint-finishes" ||
-          sel.tradeCategory.slug === "framing-drywall"
-        ) {
-          await prisma.selectionItem.update({
-            where: { id: sel.id },
-            data: { takeoffQty: metrics.netWallAreaSqFt },
-          });
-        }
+      const nextQty = resolveCascadedTakeoffQty(sel, metrics);
+      if (nextQty !== null && nextQty !== sel.takeoffQty) {
+        await prisma.selectionItem.update({
+          where: { id: sel.id },
+          data: { takeoffQty: nextQty },
+        });
+        cascadedItemsCount++;
       }
     }
 
@@ -112,10 +130,71 @@ export async function PATCH(
       });
     }
 
-    return NextResponse.json({ ok: true, room: updatedRoom });
+    revalidatePath("/");
+    revalidatePath(`/projects/${existing.projectId}/print/master-takeoff`);
+    revalidatePath(`/projects/${existing.projectId}/print/trade-packet`);
+    revalidatePath(`/projects/${existing.projectId}/print/closeout-binder`);
+
+    return NextResponse.json({
+      ok: true,
+      room: updatedRoom,
+      cascadedItemsCount,
+    });
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message || "Failed to update room" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: roomId } = await params;
+    const sessionUser = await getSessionUser();
+
+    if (sessionUser.role !== "BUILDER_ADMIN") {
+      return NextResponse.json(
+        { error: "Forbidden: Only Builder Admins can delete rooms." },
+        { status: 403 }
+      );
+    }
+
+    const existing = await prisma.room.findUnique({
+      where: { id: roomId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    }
+
+    await prisma.$transaction([
+      prisma.selectionComment.deleteMany({
+        where: {
+          selectionItem: {
+            roomId,
+          },
+        },
+      }),
+      prisma.selectionItem.deleteMany({
+        where: { roomId },
+      }),
+      prisma.windowDoorOpening.deleteMany({
+        where: { roomId },
+      }),
+      prisma.room.delete({
+        where: { id: roomId },
+      }),
+    ]);
+
+    return NextResponse.json({ deleted: true });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message || "Failed to delete room" },
       { status: 500 }
     );
   }

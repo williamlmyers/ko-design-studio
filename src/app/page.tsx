@@ -30,6 +30,9 @@ import {
   Pencil,
   Palette,
   X,
+  Loader2,
+  Trash2,
+  ClipboardPaste,
 } from "lucide-react";
 import {
   PHASE_GATEWAYS,
@@ -40,6 +43,10 @@ import {
 import { FloorPlanCanvas } from "@/components/FloorPlanCanvas";
 import { WindowDoorSchedule } from "@/components/WindowDoorSchedule";
 import { PlanUploadWizard } from "@/components/PlanUploadWizard";
+import { ShowroomCatalogDrawer } from "@/components/ShowroomCatalogDrawer";
+import { UpdateProjectPlansModal } from "@/components/UpdateProjectPlansModal";
+import { getDefaultProductMedia } from "@/lib/product-media";
+import { uploadBlobViaStorageAdapter } from "@/lib/pdf-floorplan-extractor";
 
 type ContextMode =
   | "ROOM_MATRIX"
@@ -51,9 +58,12 @@ type ContextMode =
 
 interface EditSpecFormState {
   id: string;
-  componentName: string;
+  roomId: string;
   roomName: string;
+  tradeCategoryId: string;
   tradeName: string;
+  phaseGateway: string;
+  componentName: string;
   status: string;
   approvedByInitials: string | null;
   approvedAt: string | null;
@@ -64,9 +74,17 @@ interface EditSpecFormState {
   colorCode: string;
   colorHex: string;
   finish: string;
+  takeoffQty: number;
+  wasteFactorPct: number;
   unitCost: number;
+  allowanceAmount: number;
   unitType: string;
+  isOwnerFurnished: boolean;
   isRadiantFloorApproved: boolean;
+  leadTimeWeeks: number;
+  mountingHeight: string;
+  switchGroup: string;
+  colorTempKelvin: string;
   installNotes: string;
   swatchImageUrl: string;
   productUrl: string;
@@ -79,6 +97,15 @@ export default function KOPortalPage() {
   const [projectData, setProjectData] = useState<any | null>(null);
   const [tradeCategories, setTradeCategories] = useState<any[]>([]);
   const [catalogPresets, setCatalogPresets] = useState<any[]>([]);
+  const [catalogItems, setCatalogItems] = useState<any[]>([]);
+  const [showCatalogDrawer, setShowCatalogDrawer] = useState<boolean>(false);
+  const [applyingCatalogItemId, setApplyingCatalogItemId] = useState<
+    string | null
+  >(null);
+  const [showOverviewPinMap, setShowOverviewPinMap] = useState<boolean>(true);
+  const [showUpdatePlansModal, setShowUpdatePlansModal] =
+    useState<boolean>(false);
+  const [copiedFieldLink, setCopiedFieldLink] = useState<boolean>(false);
   const [activeRole, setActiveRole] = useState<
     "BUILDER_ADMIN" | "HOMEOWNER" | "SUBCONTRACTOR"
   >("BUILDER_ADMIN");
@@ -100,20 +127,28 @@ export default function KOPortalPage() {
     null
   );
   const [savingEditSpec, setSavingEditSpec] = useState<boolean>(false);
+  const [uploadingSpecPhoto, setUploadingSpecPhoto] = useState<boolean>(false);
+  const [specPhotoPasteNotice, setSpecPhotoPasteNotice] = useState<string>("");
   const [expandedCommentsId, setExpandedCommentsId] = useState<string | null>(
     null
   );
   const [commentDraft, setCommentDraft] = useState<string>("");
   const [approvalInitials, setApprovalInitials] = useState<string>("JRT");
   const [copiedMagicLink, setCopiedMagicLink] = useState<boolean>(false);
+  const [showShareLinksModal, setShowShareLinksModal] =
+    useState<boolean>(false);
+  const [copiedTradeSlug, setCopiedTradeSlug] = useState<string | null>(null);
 
   // Custom Product / Web Clipper Form State
   const [customComponentName, setCustomComponentName] = useState("");
   const [customManufacturer, setCustomManufacturer] = useState("");
   const [customProductName, setCustomProductName] = useState("");
   const [customSku, setCustomSku] = useState("");
+  const [customFinish, setCustomFinish] = useState("Standard");
   const [customColorName, setCustomColorName] = useState("");
+  const [customColorCode, setCustomColorCode] = useState("");
   const [customColorHex, setCustomColorHex] = useState("#D97706");
+  const [customSwatchImageUrl, setCustomSwatchImageUrl] = useState("");
   const [customPhase, setCustomPhase] = useState<string>(PHASE_GATEWAYS[2]);
   const [customRoomId, setCustomRoomId] = useState<string>("");
   const [customTradeId, setCustomTradeId] = useState<string>("");
@@ -125,6 +160,20 @@ export default function KOPortalPage() {
   const [customIsRadiantOk, setCustomIsRadiantOk] = useState<boolean>(true);
   const [customProductUrl, setCustomProductUrl] = useState<string>("");
   const [customInstallNotes, setCustomInstallNotes] = useState<string>("");
+
+  // Web Clipper Auto-Fill State
+  const [clipperRawText, setClipperRawText] = useState<string>("");
+  const [showClipperRawTextBox, setShowClipperRawTextBox] =
+    useState<boolean>(false);
+  const [showBookmarkletHelper, setShowBookmarkletHelper] =
+    useState<boolean>(true);
+  const [copiedBookmarklet, setCopiedBookmarklet] = useState<boolean>(false);
+  const [lastAppliedBookmarkletId, setLastAppliedBookmarkletId] =
+    useState<string>("");
+  const [clippingProduct, setClippingProduct] = useState<boolean>(false);
+  const [clipperMessage, setClipperMessage] = useState<string>("");
+  const [clipperBlocked, setClipperBlocked] = useState<boolean>(false);
+  const [clipperHighlight, setClipperHighlight] = useState<boolean>(false);
 
   async function loadInitialList() {
     setLoading(true);
@@ -140,6 +189,7 @@ export default function KOPortalPage() {
       setProjects(list);
       setTradeCategories(projData.tradeCategories || []);
       setCatalogPresets(projData.catalogPresets || []);
+      setCatalogItems(projData.catalogItems || []);
       setDemoSwitcherEnabled(authData.demoSwitcherEnabled ?? true);
 
       const initialRole =
@@ -162,7 +212,8 @@ export default function KOPortalPage() {
   async function loadProjectDetail(projectId: string, roleOverride?: string) {
     const roleToUse = roleOverride || activeRole;
     const res = await fetch(
-      `/api/projects/${projectId}?role=${encodeURIComponent(roleToUse)}`
+      `/api/projects/${projectId}?role=${encodeURIComponent(roleToUse)}&_t=${Date.now()}`,
+      { cache: "no-store" }
     );
     const data = await res.json();
     if (data.project) {
@@ -211,12 +262,95 @@ export default function KOPortalPage() {
     await loadProjectDetail(projectData.id);
   }
 
+  async function handleApplyCatalogItemFromDrawer(catItem: any) {
+    if (!editingSpec || !projectData) return;
+    setApplyingCatalogItemId(catItem.id);
+    try {
+      const media = getDefaultProductMedia({
+        sku: catItem.sku,
+        manufacturer: catItem.manufacturer,
+        productName: catItem.productName,
+        colorName: catItem.colorName,
+        colorCode: catItem.colorCode,
+        colorHex: catItem.colorHex,
+      });
+
+      setEditingSpec({
+        ...editingSpec,
+        manufacturer: catItem.manufacturer,
+        productName: catItem.productName,
+        sku: catItem.sku,
+        colorName: catItem.colorName,
+        colorCode: catItem.colorCode,
+        colorHex: catItem.colorHex,
+        finish: catItem.finish,
+        unitCost: Number(catItem.unitCost) || 0,
+        isRadiantFloorApproved: Boolean(catItem.isRadiantFloorApproved),
+        installNotes: catItem.notes || editingSpec.installNotes,
+        swatchImageUrl: media.swatchImageUrl,
+        productUrl: media.productUrl,
+        vendorName: media.vendorName,
+      });
+
+      await fetch(`/api/selections/${editingSpec.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "apply_catalog_item",
+          catalogItemId: catItem.id,
+        }),
+      });
+
+      setShowCatalogDrawer(false);
+      await loadProjectDetail(projectData.id);
+    } finally {
+      setApplyingCatalogItemId(null);
+    }
+  }
+
+  function getTradeScopedFieldUrl(tradeSlugOverride?: string): string {
+    if (!projectData) return "#";
+    const slug =
+      tradeSlugOverride ||
+      (selectedTradeSlug !== "ALL"
+        ? selectedTradeSlug
+        : tradeCategories[0]?.slug || "electrical-lighting");
+    const hmacToken = projectData.tradeShareTokens?.[slug] || "";
+    return `/trade-packet/${projectData.id}/${slug}?token=${encodeURIComponent(
+      hmacToken
+    )}`;
+  }
+
+  function handleCopyTokenizedFieldLink(tradeSlugOverride?: string) {
+    if (!projectData) return;
+    const slug =
+      tradeSlugOverride ||
+      (selectedTradeSlug !== "ALL"
+        ? selectedTradeSlug
+        : tradeCategories[0]?.slug || "electrical-lighting");
+    const path = getTradeScopedFieldUrl(slug);
+    const url = `${window.location.origin}${path}`;
+    navigator.clipboard.writeText(url);
+    setCopiedFieldLink(true);
+    setCopiedTradeSlug(slug);
+    setTimeout(() => {
+      setCopiedFieldLink(false);
+      setCopiedTradeSlug(null);
+    }, 2500);
+  }
   function openEditSpecModal(item: any) {
     setEditingSpec({
       id: item.id,
-      componentName: item.componentName || "",
+      roomId: item.roomId || item.room?.id || projectData?.rooms?.[0]?.id || "",
       roomName: item.room?.name || "",
+      tradeCategoryId:
+        item.tradeCategoryId ||
+        item.tradeCategory?.id ||
+        tradeCategories[0]?.id ||
+        "",
       tradeName: item.tradeCategory?.name || "",
+      phaseGateway: item.phaseGateway || PHASE_GATEWAYS[2],
+      componentName: item.componentName || item.productName || "",
       status: item.status || "Option Selected",
       approvedByInitials: item.approvedByInitials || null,
       approvedAt: item.approvedAt || null,
@@ -227,9 +361,20 @@ export default function KOPortalPage() {
       colorCode: item.colorCode || "",
       colorHex: item.colorHex || "#CBD5E1",
       finish: item.finish || "Standard",
+      takeoffQty: Number(item.takeoffQty) || 1,
+      wasteFactorPct: Number(item.wasteFactorPct) || 0,
       unitCost: Number(item.unitCost) || 0,
+      allowanceAmount: Number(item.allowanceAmount) || 0,
       unitType: item.unitType || "each",
+      isOwnerFurnished: Boolean(item.isOwnerFurnished),
       isRadiantFloorApproved: Boolean(item.isRadiantFloorApproved),
+      leadTimeWeeks: Number(item.leadTimeWeeks) || 4,
+      mountingHeight: item.mountingHeight || "",
+      switchGroup: item.switchGroup || "",
+      colorTempKelvin:
+        item.colorTempKelvin !== null && item.colorTempKelvin !== undefined
+          ? String(item.colorTempKelvin)
+          : "",
       installNotes: item.installNotes || "",
       swatchImageUrl: item.swatchImageUrl || "",
       productUrl: item.productUrl || "",
@@ -237,23 +382,151 @@ export default function KOPortalPage() {
     });
   }
 
+  async function uploadSpecImageBlob(
+    blobOrFile: Blob | File,
+    customFileName?: string
+  ) {
+    setUploadingSpecPhoto(true);
+    setSpecPhotoPasteNotice("Uploading product photo...");
+    try {
+      const ext = (blobOrFile.type.split("/")[1] || "png").replace(
+        /[^a-z0-9]/gi,
+        ""
+      );
+      const finalName =
+        customFileName ||
+        (blobOrFile instanceof File && blobOrFile.name
+          ? blobOrFile.name
+          : `pasted-product-${Date.now()}.${ext || "png"}`);
+      const fileToUpload = new File([blobOrFile], finalName, {
+        type: blobOrFile.type || "image/png",
+      });
+
+      const publicUrl = await uploadBlobViaStorageAdapter(
+        fileToUpload,
+        fileToUpload.name
+      );
+
+      setEditingSpec((prev) =>
+        prev
+          ? {
+              ...prev,
+              swatchImageUrl: publicUrl,
+            }
+          : prev
+      );
+      setSpecPhotoPasteNotice("Product image uploaded & applied!");
+      setTimeout(() => setSpecPhotoPasteNotice(""), 3200);
+    } catch (err: any) {
+      setSpecPhotoPasteNotice(
+        err?.message || "Failed to upload product image."
+      );
+    } finally {
+      setUploadingSpecPhoto(false);
+    }
+  }
+
   async function handleUploadSpecPhoto(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !editingSpec) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      body: formData,
-    });
-    const data = await res.json();
-    if (data?.publicUrl) {
-      setEditingSpec({
-        ...editingSpec,
-        swatchImageUrl: data.publicUrl,
-      });
+    await uploadSpecImageBlob(file, file.name);
+  }
+
+  async function extractAndUploadFromClipboardItems(
+    items: DataTransferItemList | undefined | null
+  ): Promise<boolean> {
+    if (!items) return false;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith("image/")) {
+        const blob = item.getAsFile();
+        if (blob) {
+          const ext = (blob.type.split("/")[1] || "png").replace(
+            /[^a-z0-9]/gi,
+            ""
+          );
+          await uploadSpecImageBlob(
+            blob,
+            `pasted-product-${Date.now()}.${ext || "png"}`
+          );
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async function handleModalPasteEvent(e: React.ClipboardEvent) {
+    if (!editingSpec) return;
+    const foundImage = await extractAndUploadFromClipboardItems(
+      e.clipboardData?.items
+    );
+    if (foundImage) {
+      e.preventDefault();
     }
   }
+
+  async function handleClickPasteFromClipboard() {
+    if (!editingSpec) return;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.read === "function") {
+        const clipboardItems = await navigator.clipboard.read();
+        for (const clipItem of clipboardItems) {
+          const imageType = clipItem.types.find((t) => t.startsWith("image/"));
+          if (imageType) {
+            const blob = await clipItem.getType(imageType);
+            const ext = (imageType.split("/")[1] || "png").replace(
+              /[^a-z0-9]/gi,
+              ""
+            );
+            await uploadSpecImageBlob(
+              blob,
+              `pasted-product-${Date.now()}.${ext || "png"}`
+            );
+            return;
+          }
+        }
+      }
+      setSpecPhotoPasteNotice(
+        "Copy an image or screenshot first, then press Ctrl+V anywhere in this window."
+      );
+    } catch {
+      setSpecPhotoPasteNotice(
+        "Press Ctrl+V (or Cmd+V) right now to paste your copied image."
+      );
+    }
+  }
+
+  useEffect(() => {
+    if (!editingSpec) {
+      setSpecPhotoPasteNotice("");
+      return;
+    }
+    function onWindowPaste(e: ClipboardEvent) {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          const blob = item.getAsFile();
+          if (blob) {
+            e.preventDefault();
+            const ext = (blob.type.split("/")[1] || "png").replace(
+              /[^a-z0-9]/gi,
+              ""
+            );
+            uploadSpecImageBlob(
+              blob,
+              `pasted-product-${Date.now()}.${ext || "png"}`
+            );
+            return;
+          }
+        }
+      }
+    }
+    window.addEventListener("paste", onWindowPaste);
+    return () => window.removeEventListener("paste", onWindowPaste);
+  }, [editingSpec?.id]);
 
   async function handleUnlockInsideModal() {
     if (!editingSpec || !projectData) return;
@@ -280,6 +553,10 @@ export default function KOPortalPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          roomId: editingSpec.roomId,
+          tradeCategoryId: editingSpec.tradeCategoryId,
+          phaseGateway: editingSpec.phaseGateway,
+          componentName: editingSpec.componentName || editingSpec.productName,
           manufacturer: editingSpec.manufacturer,
           productName: editingSpec.productName,
           sku: editingSpec.sku,
@@ -287,8 +564,21 @@ export default function KOPortalPage() {
           colorCode: editingSpec.colorCode,
           colorHex: editingSpec.colorHex,
           finish: editingSpec.finish,
-          unitCost: Number(editingSpec.unitCost),
+          takeoffQty: Number(editingSpec.takeoffQty) || 1,
+          wasteFactorPct: Number(editingSpec.wasteFactorPct) || 0,
+          unitType: editingSpec.unitType,
+          unitCost: editingSpec.isOwnerFurnished
+            ? 0
+            : Number(editingSpec.unitCost) || 0,
+          allowanceAmount: Number(editingSpec.allowanceAmount) || 0,
+          isOwnerFurnished: Boolean(editingSpec.isOwnerFurnished),
           isRadiantFloorApproved: Boolean(editingSpec.isRadiantFloorApproved),
+          leadTimeWeeks: Number(editingSpec.leadTimeWeeks) || 4,
+          mountingHeight: editingSpec.mountingHeight || null,
+          switchGroup: editingSpec.switchGroup || null,
+          colorTempKelvin: editingSpec.colorTempKelvin
+            ? Number(editingSpec.colorTempKelvin)
+            : "",
           installNotes: editingSpec.installNotes,
           swatchImageUrl: editingSpec.swatchImageUrl || null,
           productUrl: editingSpec.productUrl || null,
@@ -298,6 +588,38 @@ export default function KOPortalPage() {
       await loadProjectDetail(projectData.id);
     } finally {
       setSavingEditSpec(false);
+    }
+  }
+
+  async function handleDeleteSelectionItem(
+    selectionId: string,
+    productName: string,
+    roomName: string
+  ) {
+    if (!projectData || !isBuilderAdmin) return;
+    const confirmed = window.confirm(
+      `Delete '${productName}' from ${roomName}?`
+    );
+    if (!confirmed) return;
+
+    const res = await fetch(`/api/selections/${selectionId}`, {
+      method: "DELETE",
+    });
+    if (res.ok) {
+      if (editingSpec?.id === selectionId) {
+        setEditingSpec(null);
+      }
+      setProjectData((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              selections: (prev.selections || []).filter(
+                (s: any) => s.id !== selectionId
+              ),
+            }
+          : prev
+      );
+      await loadProjectDetail(projectData.id);
     }
   }
 
@@ -385,6 +707,244 @@ export default function KOPortalPage() {
     await loadProjectDetail(projectData.id);
   }
 
+  function applyClippedProductToForm(
+    p: any,
+    sourceUrl?: string,
+    noticePrefix = "Auto-filled"
+  ) {
+    if (!p) return;
+    if (sourceUrl) {
+      setCustomProductUrl(sourceUrl);
+    }
+    setCustomManufacturer(p.manufacturer || "Specified Brand");
+    setCustomSku(p.modelNumber || "SPEC-01");
+    setCustomProductName(p.productName || "Specified Product");
+    setCustomComponentName(p.productName || "Custom Specified Product");
+    setCustomFinish(p.finish || "Standard");
+    setCustomColorName(p.colorName || "Standard Finish");
+    setCustomColorCode(p.colorCode || "");
+    if (p.colorHex && /^#[0-9A-Fa-f]{6}$/.test(p.colorHex)) {
+      setCustomColorHex(p.colorHex);
+    }
+    if (Number(p.unitCost) > 0) {
+      setCustomUnitCost(Number(p.unitCost));
+      setCustomAllowance(Number(p.unitCost));
+    }
+    if (p.unit) {
+      setCustomUnitType(p.unit);
+    }
+    if (p.imageUrl) {
+      setCustomSwatchImageUrl(p.imageUrl);
+    }
+    if (p.specNotes) {
+      setCustomInstallNotes(p.specNotes);
+    }
+    if (p.tradeCategory) {
+      const matchedTrade = tradeCategories.find(
+        (t) => t.slug === p.tradeCategory
+      );
+      if (matchedTrade) {
+        setCustomTradeId(matchedTrade.id);
+      }
+    }
+
+    setClipperBlocked(false);
+    setClipperMessage(
+      `${noticePrefix} "${p.manufacturer} — ${p.productName}" (${p.modelNumber}). Review or tweak any field below before saving!`
+    );
+    setClipperHighlight(true);
+    setTimeout(() => setClipperHighlight(false), 2600);
+  }
+
+  function getKoClipperBookmarkletCode(): string {
+    const studioOrigin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : "http://localhost:3000";
+    const script = `(function(){try{var d=document,u=location.href,t=d.title||"",m=function(s){var el=d.querySelector(s);return el?el.getAttribute("content")||"":""};var ogTitle=m('meta[property="og:title"]')||m('meta[name="twitter:title"]')||t;var ogImage=m('meta[property="og:image"]')||m('meta[name="twitter:image"]')||(d.querySelector('img[src*="thdstatic"],img[src*="lowes"],img[itemprop="image"],main img')||{}).src||"";var ogPrice=m('meta[property="product:price:amount"]')||m('meta[property="og:price:amount"]')||"";var ogBrand=m('meta[property="product:brand"]')||"";var jlds=Array.from(d.querySelectorAll('script[type="application/ld+json"]')).map(function(s){return s.textContent||""}).join("\\n").slice(0,8000);var txt=(d.body?d.body.innerText:"").replace(/\\s+/g," ").slice(0,12000);var payload={__koClipper:true,fromBookmarklet:true,clipId:"bm-"+Date.now(),url:u,ogTitle:ogTitle,ogImage:ogImage,ogPrice:ogPrice,ogBrand:ogBrand,jsonLd:jlds,rawText:txt};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(JSON.stringify(payload)).catch(function(){});}if(window.opener){try{window.opener.postMessage({type:"KO_CLIPPER_BOOKMARKLET",payload:payload},"*");}catch(e){}}fetch("${studioOrigin}/api/clip-product",{method:"POST",mode:"cors",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).catch(function(){});var b=d.createElement("div");b.style.cssText="position:fixed;top:16px;right:16px;z-index:2147483647;background:#065f46;color:#ecfdf5;border:2px solid #10b981;padding:12px 18px;border-radius:12px;font:600 13px/1.4 system-ui,sans-serif;box-shadow:0 12px 32px rgba(0,0,0,0.45);";b.textContent="✓ Clipped to KO Design Studio! Switch back to your KO Studio tab to auto-fill.";d.body.appendChild(b);setTimeout(function(){b.remove();},4200);}catch(err){alert("KO Clipper Error: "+err.message);}})();`;
+    return `javascript:${encodeURIComponent(script)}`;
+  }
+
+  function handleCopyBookmarkletCode() {
+    navigator.clipboard.writeText(getKoClipperBookmarkletCode());
+    setCopiedBookmarklet(true);
+    setTimeout(() => setCopiedBookmarklet(false), 2500);
+  }
+
+  async function processIncomingBookmarkletPayload(payload: any) {
+    if (!payload) return;
+    if (payload.clipId && payload.clipId === lastAppliedBookmarkletId) return;
+    if (payload.clipId) {
+      setLastAppliedBookmarkletId(payload.clipId);
+    }
+
+    setClippingProduct(true);
+    setClipperMessage("Processing 1-Click KO Clipper Bookmarklet data...");
+    try {
+      const res = await fetch("/api/clip-product", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: payload.url || "",
+          ogTitle: payload.ogTitle || "",
+          ogImage: payload.ogImage || "",
+          ogPrice: payload.ogPrice || "",
+          ogBrand: payload.ogBrand || "",
+          jsonLd: payload.jsonLd || "",
+          rawText: payload.rawText || "",
+          fromBookmarklet: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.product) {
+        applyClippedProductToForm(
+          data.product,
+          payload.url,
+          "Clipped from active browser tab:"
+        );
+      }
+    } catch (err: any) {
+      setClipperMessage(
+        err?.message || "Failed to parse bookmarklet payload."
+      );
+    } finally {
+      setClippingProduct(false);
+    }
+  }
+
+  async function checkAndImportBookmarkletClip(silent = false) {
+    try {
+      // 1. Check server-side latest bookmarklet clip (`POST /api/clip-product` from external tab)
+      const res = await fetch(`/api/clip-product?_t=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const latest = data?.latestClip;
+        if (
+          latest &&
+          latest.id &&
+          latest.id !== lastAppliedBookmarkletId &&
+          Date.now() - Number(latest.timestamp || 0) < 10 * 60 * 1000
+        ) {
+          setLastAppliedBookmarkletId(latest.id);
+          applyClippedProductToForm(
+            latest.product,
+            latest.url,
+            "Auto-imported from KO Clipper Bookmarklet:"
+          );
+          return;
+        }
+      }
+
+      // 2. Check clipboard if user clicked "Clip to KO Studio" on a CSP-restricted retail tab
+      if (
+        navigator.clipboard &&
+        typeof navigator.clipboard.readText === "function"
+      ) {
+        const clipText = await navigator.clipboard.readText();
+        if (clipText && clipText.trim().startsWith('{"__koClipper":true')) {
+          const parsed = JSON.parse(clipText.trim());
+          if (parsed.__koClipper) {
+            await processIncomingBookmarkletPayload(parsed);
+            return;
+          }
+        }
+      }
+
+      if (!silent) {
+        setClipperMessage(
+          "No new bookmarklet clip found yet. Click 'Clip to KO Studio' on any Home Depot, Lowe's, or vendor tab first!"
+        );
+      }
+    } catch {
+      if (!silent) {
+        setClipperMessage(
+          "Press Ctrl+V inside the URL or text box to paste your bookmarklet clip."
+        );
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!showCustomEntryModal) return;
+
+    function onWindowMessage(e: MessageEvent) {
+      if (e.data?.type === "KO_CLIPPER_BOOKMARKLET" && e.data?.payload) {
+        processIncomingBookmarkletPayload(e.data.payload);
+      }
+    }
+
+    function onWindowFocus() {
+      checkAndImportBookmarkletClip(true);
+    }
+
+    window.addEventListener("message", onWindowMessage);
+    window.addEventListener("focus", onWindowFocus);
+    return () => {
+      window.removeEventListener("message", onWindowMessage);
+      window.removeEventListener("focus", onWindowFocus);
+    };
+  }, [showCustomEntryModal, lastAppliedBookmarkletId, tradeCategories]);
+
+  async function handleFetchAndAutoFillClipper() {
+    if (!customProductUrl.trim() && !clipperRawText.trim()) {
+      setClipperMessage(
+        "Please paste a vendor product URL or copied product text first."
+      );
+      return;
+    }
+
+    // Check if the user pasted the raw JSON envelope from the KO Clipper Bookmarklet
+    const trimmedRaw = clipperRawText.trim() || customProductUrl.trim();
+    if (trimmedRaw.startsWith('{"__koClipper":true')) {
+      try {
+        const parsed = JSON.parse(trimmedRaw);
+        await processIncomingBookmarkletPayload(parsed);
+        return;
+      } catch {
+        // Continue normal flow
+      }
+    }
+
+    setClippingProduct(true);
+    setClipperMessage("Fetching & extracting product specifications...");
+    setClipperBlocked(false);
+
+    try {
+      const res = await fetch("/api/clip-product", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: customProductUrl.trim(),
+          rawText: clipperRawText.trim(),
+        }),
+      });
+      const data = await res.json();
+
+      if (data.blocked) {
+        setClipperBlocked(true);
+        setShowClipperRawTextBox(true);
+        setShowBookmarkletHelper(true);
+        setClipperMessage(
+          data.message ||
+            "Vendor blocked direct fetch—use the 1-Click KO Clipper Bookmarklet or paste page text below to auto-fill."
+        );
+        return;
+      }
+
+      if (data.product) {
+        applyClippedProductToForm(data.product);
+      }
+    } catch (err: any) {
+      setClipperMessage(
+        err?.message || "Could not fetch product details. Try pasting text."
+      );
+    } finally {
+      setClippingProduct(false);
+    }
+  }
+
   async function handleCreateCustomSelection(e: React.FormEvent) {
     e.preventDefault();
     if (!projectData) return;
@@ -396,13 +956,16 @@ export default function KOPortalPage() {
         roomId: customRoomId || projectData.rooms[0]?.id,
         tradeCategoryId: customTradeId || tradeCategories[0]?.id,
         phaseGateway: customPhase,
-        componentName: customComponentName,
+        componentName: customComponentName || customProductName,
         manufacturer: customManufacturer || "Custom Brand",
         productName: customProductName || "Custom Specified Product",
         sku: customSku || "CUST-01",
+        finish: customFinish || "Standard",
         colorName: customColorName || "Custom Finish",
+        colorCode: customColorCode || "",
         colorHex: customColorHex,
         productUrl: customProductUrl || null,
+        swatchImageUrl: customSwatchImageUrl || null,
         installNotes: customInstallNotes || null,
         unitType: customUnitType,
         takeoffQty: customQty,
@@ -414,6 +977,7 @@ export default function KOPortalPage() {
     });
     setShowCustomEntryModal(false);
     setCustomComponentName("");
+    setClipperMessage("");
     await loadProjectDetail(projectData.id);
   }
 
@@ -533,18 +1097,20 @@ export default function KOPortalPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* Edit Spec / Custom Color Modal Overlay */}
+      {/* Edit Spec Modal Overlay */}
       {editingSpec && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
           <form
             onSubmit={handleSaveEditSpec}
-            className="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5"
+            onPaste={handleModalPasteEvent}
+            className="w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden rounded-xl bg-slate-900 border border-amber-500/50 shadow-2xl"
           >
-            <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
+            {/* Sticky Header */}
+            <div className="shrink-0 border-b border-slate-800 px-6 py-4 flex items-start justify-between gap-4">
               <div>
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
                   <Palette className="w-4 h-4" />
-                  Selection Item Specification Detail & Custom Color
+                  Selection Item Specification Details
                 </div>
                 <h3 className="text-lg font-bold text-white mt-0.5">
                   {editingSpec.componentName}
@@ -553,342 +1119,926 @@ export default function KOPortalPage() {
                   {editingSpec.roomName} • {editingSpec.tradeName}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                {editingSpec.status === "Client Approved & Locked" &&
-                  isBuilderAdmin && (
-                    <button
-                      type="button"
-                      onClick={handleUnlockInsideModal}
-                      className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 font-semibold text-xs flex items-center gap-1.5 transition"
-                    >
-                      <Unlock className="w-3.5 h-3.5" />
-                      Unlock Item
-                    </button>
-                  )}
-                <button
-                  type="button"
-                  onClick={() => setEditingSpec(null)}
-                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {editingSpec.status === "Client Approved & Locked" && (
-              <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex items-center gap-2 text-emerald-300 font-medium">
-                  <Lock className="w-4 h-4 shrink-0" />
-                  <span>
-                    Status: <strong>Client Approved & Locked</strong>{" "}
-                    {editingSpec.approvedByInitials &&
-                      `(Signed by ${editingSpec.approvedByInitials})`}
-                  </span>
-                </div>
-                {isBuilderAdmin && (
-                  <button
-                    type="button"
-                    onClick={handleUnlockInsideModal}
-                    className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-amber-500/40 text-amber-300 font-semibold text-[11px] flex items-center gap-1"
-                  >
-                    <Unlock className="w-3 h-3" />
-                    Unlock Item
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3.5">
-                <div className="relative w-24 h-20 rounded-xl overflow-hidden border border-slate-700 bg-slate-900 shrink-0">
-                  {editingSpec.swatchImageUrl && (
-                    <img
-                      src={editingSpec.swatchImageUrl}
-                      alt={editingSpec.productName}
-                      className="w-full h-full object-cover"
-                    />
-                  )}
-                  <span
-                    className="absolute bottom-1 right-1 w-5 h-5 rounded-md border border-slate-900 shadow"
-                    style={{
-                      backgroundColor: editingSpec.colorHex || "#CBD5E1",
-                    }}
-                  />
-                </div>
-                <div className="space-y-1 text-xs">
-                  <div className="font-bold text-white">
-                    {editingSpec.manufacturer} — {editingSpec.productName}
-                  </div>
-                  <div className="text-slate-400">
-                    Sourced via:{" "}
-                    <strong className="text-amber-300">
-                      {editingSpec.vendorName}
-                    </strong>
-                  </div>
-                  {editingSpec.productUrl && (
-                    <a
-                      href={editingSpec.productUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 font-semibold underline"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      Open Supplier / Manufacturer Product Page
-                    </a>
-                  )}
-                </div>
-              </div>
-
-              <label className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-amber-300 cursor-pointer flex items-center gap-1.5">
-                <FilePlus2 className="w-3.5 h-3.5" />
-                Upload Product Photo
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleUploadSpecPhoto}
-                  className="hidden"
-                />
-              </label>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Manufacturer
-                </label>
-                <input
-                  required
-                  value={editingSpec.manufacturer}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      manufacturer: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Product Name / Series
-                </label>
-                <input
-                  required
-                  value={editingSpec.productName}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      productName: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Model / SKU
-                </label>
-                <input
-                  required
-                  value={editingSpec.sku}
-                  onChange={(e) =>
-                    setEditingSpec({ ...editingSpec, sku: e.target.value })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Finish / Sheen
-                </label>
-                <input
-                  value={editingSpec.finish}
-                  onChange={(e) =>
-                    setEditingSpec({ ...editingSpec, finish: e.target.value })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Color Name
-                </label>
-                <input
-                  value={editingSpec.colorName}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      colorName: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Color Code / Paint Formula
-                </label>
-                <input
-                  placeholder="e.g. SW 7008 / NW-104"
-                  value={editingSpec.colorCode}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      colorCode: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Live Swatch Color Picker (colorHex)
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={editingSpec.colorHex || "#CBD5E1"}
-                    onChange={(e) =>
-                      setEditingSpec({
-                        ...editingSpec,
-                        colorHex: e.target.value,
-                      })
-                    }
-                    className="w-10 h-9 rounded-lg bg-slate-950 border border-slate-700 cursor-pointer"
-                  />
-                  <input
-                    value={editingSpec.colorHex}
-                    onChange={(e) =>
-                      setEditingSpec({
-                        ...editingSpec,
-                        colorHex: e.target.value,
-                      })
-                    }
-                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Unit Cost ($ per {editingSpec.unitType})
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={editingSpec.unitCost}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      unitCost: Number(e.target.value),
-                    })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
-                />
-              </div>
-
-              <div className="md:col-span-2 bg-slate-950/90 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
-                <div>
-                  <div className="font-semibold text-white flex items-center gap-1.5">
-                    <Flame className="w-3.5 h-3.5 text-orange-400" />
-                    Hydronic Radiant Concrete Slab Approved
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    Uncheck if material exceeds thermal resistance R-value limit
-                    over radiant slab zones
-                  </div>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={editingSpec.isRadiantFloorApproved}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      isRadiantFloorApproved: e.target.checked,
-                    })
-                  }
-                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
-                />
-              </div>
-
-              <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="text-slate-400 block mb-1 font-medium">
-                    Sourcing / Vendor Product Link (productUrl)
-                  </label>
-                  <input
-                    placeholder="https://www.brizo.com/..."
-                    value={editingSpec.productUrl}
-                    onChange={(e) =>
-                      setEditingSpec({
-                        ...editingSpec,
-                        productUrl: e.target.value,
-                      })
-                    }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-slate-400 block mb-1 font-medium">
-                    Product Photo / Swatch Image URL (swatchImageUrl)
-                  </label>
-                  <input
-                    placeholder="https://... or /api/uploads/..."
-                    value={editingSpec.swatchImageUrl}
-                    onChange={(e) =>
-                      setEditingSpec({
-                        ...editingSpec,
-                        swatchImageUrl: e.target.value,
-                      })
-                    }
-                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="text-slate-400 block mb-1 font-medium">
-                  Installation & Field Specification Notes
-                </label>
-                <textarea
-                  rows={3}
-                  value={editingSpec.installNotes}
-                  onChange={(e) =>
-                    setEditingSpec({
-                      ...editingSpec,
-                      installNotes: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
               <button
                 type="button"
                 onClick={() => setEditingSpec(null)}
-                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300"
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 shrink-0"
               >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={savingEditSpec}
-                className="px-5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20"
-              >
-                {savingEditSpec
-                  ? "Saving Specification..."
-                  : "Save Spec & Recalculate Variance"}
+                <X className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Scrollable Body */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {editingSpec.status === "Client Approved & Locked" && (
+                <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-emerald-300 font-medium">
+                    <Lock className="w-4 h-4 shrink-0" />
+                    <span>
+                      Status: <strong>Client Approved & Locked</strong>{" "}
+                      {editingSpec.approvedByInitials &&
+                        `(Signed by ${editingSpec.approvedByInitials})`}
+                    </span>
+                  </div>
+                  {isBuilderAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleUnlockInsideModal}
+                      className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-amber-500/40 text-amber-300 font-semibold text-[11px] flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Unlock className="w-3 h-3" />
+                      Unlock Item
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className="relative w-24 h-20 rounded-xl overflow-hidden border border-slate-700 bg-slate-900 shrink-0">
+                      {editingSpec.swatchImageUrl && (
+                        <img
+                          src={editingSpec.swatchImageUrl}
+                          alt={editingSpec.productName}
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                      <span
+                        className="absolute bottom-1 right-1 w-5 h-5 rounded-md border border-slate-900 shadow"
+                        style={{
+                          backgroundColor: editingSpec.colorHex || "#CBD5E1",
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1 text-xs">
+                      <div className="font-bold text-white">
+                        {editingSpec.manufacturer} — {editingSpec.productName}
+                      </div>
+                      <div className="text-slate-400">
+                        Sourced via:{" "}
+                        <strong className="text-amber-300">
+                          {editingSpec.vendorName}
+                        </strong>
+                      </div>
+                      {editingSpec.productUrl && (
+                        <a
+                          href={editingSpec.productUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 font-semibold underline"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          Open Supplier / Manufacturer Product Page
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowCatalogDrawer(true)}
+                      className="px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold flex items-center gap-1.5 shadow whitespace-nowrap"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Pick from KO Builders Catalog
+                    </button>
+
+                    <label className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-amber-300 cursor-pointer flex items-center gap-1.5 whitespace-nowrap">
+                      <FilePlus2 className="w-3.5 h-3.5" />
+                      Upload Product Photo
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleUploadSpecPhoto}
+                        className="hidden"
+                      />
+                    </label>
+
+                    {/* Interactive Paste Image (Ctrl+V) Drop / Paste Zone */}
+                    <button
+                      type="button"
+                      onClick={handleClickPasteFromClipboard}
+                      onPaste={handleModalPasteEvent}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const droppedFile = e.dataTransfer?.files?.[0];
+                        if (
+                          droppedFile &&
+                          droppedFile.type.startsWith("image/")
+                        ) {
+                          uploadSpecImageBlob(droppedFile, droppedFile.name);
+                        }
+                      }}
+                      disabled={uploadingSpecPhoto}
+                      className="px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-emerald-500/50 focus:border-emerald-400 text-xs font-semibold text-emerald-300 flex items-center gap-1.5 whitespace-nowrap transition"
+                      title="Click to paste image from clipboard or press Ctrl+V anywhere in this modal"
+                    >
+                      {uploadingSpecPhoto ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <ClipboardPaste className="w-3.5 h-3.5" />
+                          Paste Image (Ctrl+V)
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {specPhotoPasteNotice && (
+                  <div className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[11px] text-emerald-200 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    <span>{specPhotoPasteNotice}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 text-xs">
+                {/* Row 1: Room Assignment, Trade Category, Construction Phase */}
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Room Assignment (roomId)
+                  </label>
+                  <select
+                    value={editingSpec.roomId}
+                    onChange={(e) => {
+                      const nextRoomId = e.target.value;
+                      const matchedRoom = (projectData?.rooms || []).find(
+                        (r: any) => r.id === nextRoomId
+                      );
+                      setEditingSpec({
+                        ...editingSpec,
+                        roomId: nextRoomId,
+                        roomName: matchedRoom?.name || editingSpec.roomName,
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  >
+                    {(projectData?.rooms || []).map((r: any) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Trade Category (tradeCategory)
+                  </label>
+                  <select
+                    value={editingSpec.tradeCategoryId}
+                    onChange={(e) => {
+                      const nextTradeId = e.target.value;
+                      const matchedTrade = tradeCategories.find(
+                        (t) => t.id === nextTradeId
+                      );
+                      setEditingSpec({
+                        ...editingSpec,
+                        tradeCategoryId: nextTradeId,
+                        tradeName: matchedTrade?.name || editingSpec.tradeName,
+                      });
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  >
+                    {tradeCategories.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Construction Phase (phase)
+                  </label>
+                  <select
+                    value={editingSpec.phaseGateway}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        phaseGateway: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  >
+                    {PHASE_GATEWAYS.map((ph) => (
+                      <option key={ph} value={ph}>
+                        {ph}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Row 2: Component Title, Product Name, Manufacturer, Model / SKU */}
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Component / Schedule Title
+                  </label>
+                  <input
+                    required
+                    value={editingSpec.componentName}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        componentName: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Product Name (name)
+                  </label>
+                  <input
+                    required
+                    value={editingSpec.productName}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        productName: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Manufacturer / Brand (manufacturer)
+                  </label>
+                  <input
+                    required
+                    value={editingSpec.manufacturer}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        manufacturer: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                {/* Row 3: Model Number / SKU, Finish, Color Name */}
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Model Number / SKU (modelNumber)
+                  </label>
+                  <input
+                    required
+                    placeholder="e.g. 87071SRS / T60P975-LHP-GL"
+                    value={editingSpec.sku}
+                    onChange={(e) =>
+                      setEditingSpec({ ...editingSpec, sku: e.target.value })
+                    }
+                    className="w-full bg-slate-950 border border-amber-500/40 rounded-lg px-3 py-2 text-amber-200 font-mono font-semibold focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Finish / Sheen (finish)
+                  </label>
+                  <input
+                    value={editingSpec.finish}
+                    onChange={(e) =>
+                      setEditingSpec({ ...editingSpec, finish: e.target.value })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Color Name (colorName)
+                  </label>
+                  <input
+                    value={editingSpec.colorName}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        colorName: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                {/* Row 4: Color Code, Live Color Swatch Picker, Lead Time */}
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Color Code / Paint Formula (colorCode)
+                  </label>
+                  <input
+                    placeholder="e.g. SW 7008 / NW-104 / SRS"
+                    value={editingSpec.colorCode}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        colorCode: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Live Color Swatch Picker (colorHex)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={editingSpec.colorHex || "#CBD5E1"}
+                      onChange={(e) =>
+                        setEditingSpec({
+                          ...editingSpec,
+                          colorHex: e.target.value,
+                        })
+                      }
+                      className="w-10 h-9 rounded-lg bg-slate-950 border border-slate-700 cursor-pointer shrink-0"
+                    />
+                    <input
+                      value={editingSpec.colorHex}
+                      onChange={(e) =>
+                        setEditingSpec({
+                          ...editingSpec,
+                          colorHex: e.target.value,
+                        })
+                      }
+                      className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Lead Time (Weeks) &amp; Waste Factor (%)
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      title="Lead Time (Weeks)"
+                      placeholder="Weeks"
+                      value={editingSpec.leadTimeWeeks}
+                      onChange={(e) =>
+                        setEditingSpec({
+                          ...editingSpec,
+                          leadTimeWeeks: Number(e.target.value),
+                        })
+                      }
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      title="Waste Factor (%)"
+                      placeholder="Waste %"
+                      value={editingSpec.wasteFactorPct}
+                      onChange={(e) =>
+                        setEditingSpec({
+                          ...editingSpec,
+                          wasteFactorPct: Number(e.target.value),
+                        })
+                      }
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Row 5: Quantity, Unit of Measure, Unit Cost, Allowance + Live Extended Cost & Variance Preview */}
+                <div className="md:col-span-3 bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 space-y-3">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-slate-400 block mb-1 font-medium">
+                        Quantity (takeoffQty)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        value={editingSpec.takeoffQty}
+                        onChange={(e) =>
+                          setEditingSpec({
+                            ...editingSpec,
+                            takeoffQty: Number(e.target.value),
+                          })
+                        }
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 block mb-1 font-medium">
+                        Unit of Measure (unit)
+                      </label>
+                      <select
+                        value={editingSpec.unitType}
+                        onChange={(e) =>
+                          setEditingSpec({
+                            ...editingSpec,
+                            unitType: e.target.value,
+                          })
+                        }
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                      >
+                        <option value="each">each</option>
+                        <option value="sq ft">sq ft</option>
+                        <option value="lf">lf</option>
+                        <option value="lin ft">lin ft</option>
+                        <option value="set">set</option>
+                        <option value="lot">lot</option>
+                        <option value="allowance lump sum">
+                          allowance lump sum
+                        </option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 block mb-1 font-medium">
+                        Unit Cost ($ / {editingSpec.unitType})
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        disabled={editingSpec.isOwnerFurnished}
+                        value={
+                          editingSpec.isOwnerFurnished
+                            ? 0
+                            : editingSpec.unitCost
+                        }
+                        onChange={(e) =>
+                          setEditingSpec({
+                            ...editingSpec,
+                            unitCost: Number(e.target.value),
+                          })
+                        }
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-slate-400 block mb-1 font-medium">
+                        Allowance ($) (allowanceAmount)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={editingSpec.allowanceAmount}
+                        onChange={(e) =>
+                          setEditingSpec({
+                            ...editingSpec,
+                            allowanceAmount: Number(e.target.value),
+                          })
+                        }
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Live Auto-Calculated Extended Cost & Allowance Variance Bar */}
+                  {(() => {
+                    const effQty = Number(
+                      (
+                        (Number(editingSpec.takeoffQty) || 0) *
+                        (1 + (Number(editingSpec.wasteFactorPct) || 0) / 100)
+                      ).toFixed(2)
+                    );
+                    const extCost = editingSpec.isOwnerFurnished
+                      ? 0
+                      : editingSpec.unitType === "allowance lump sum"
+                      ? Number((Number(editingSpec.unitCost) || 0).toFixed(2))
+                      : Number(
+                          (effQty * (Number(editingSpec.unitCost) || 0)).toFixed(
+                            2
+                          )
+                        );
+                    const liveVariance = Number(
+                      (
+                        extCost - (Number(editingSpec.allowanceAmount) || 0)
+                      ).toFixed(2)
+                    );
+
+                    return (
+                      <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+                        <div className="flex flex-wrap items-center gap-4 font-mono">
+                          <span className="text-slate-400">
+                            Effective Qty:{" "}
+                            <strong className="text-white">
+                              {effQty} {editingSpec.unitType}
+                            </strong>
+                          </span>
+                          <span className="text-slate-400">
+                            Extended Cost:{" "}
+                            <strong className="text-amber-300">
+                              ${extCost.toLocaleString()}
+                            </strong>
+                          </span>
+                          <span className="text-slate-400">
+                            Allowance Variance:{" "}
+                            <strong
+                              className={
+                                liveVariance > 0
+                                  ? "text-red-400"
+                                  : "text-emerald-400"
+                              }
+                            >
+                              {liveVariance > 0 ? "+" : ""}$
+                              {liveVariance.toLocaleString()}
+                            </strong>
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-4">
+                          <label className="flex items-center gap-1.5 text-slate-200 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editingSpec.isOwnerFurnished}
+                              onChange={(e) =>
+                                setEditingSpec({
+                                  ...editingSpec,
+                                  isOwnerFurnished: e.target.checked,
+                                })
+                              }
+                              className="accent-purple-500 rounded cursor-pointer"
+                            />
+                            <span>OFCI ($0 Builder Cost)</span>
+                          </label>
+
+                          <label className="flex items-center gap-1.5 text-slate-200 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={editingSpec.isRadiantFloorApproved}
+                              onChange={(e) =>
+                                setEditingSpec({
+                                  ...editingSpec,
+                                  isRadiantFloorApproved: e.target.checked,
+                                })
+                              }
+                              className="accent-emerald-500 rounded cursor-pointer"
+                            />
+                            <Flame className="w-3.5 h-3.5 text-orange-400" />
+                            <span>Hydronic Radiant Slab Approved</span>
+                          </label>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Row 6: Mounting / Rough-In Height, Switch Group, LED Kelvin */}
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Mounting / Rough-In Height
+                  </label>
+                  <input
+                    placeholder={'e.g. 48" AFF to valve center'}
+                    value={editingSpec.mountingHeight}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        mountingHeight: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Switch Group / Dimmer Zone
+                  </label>
+                  <input
+                    placeholder="e.g. Lutron Caséta Zone K-1"
+                    value={editingSpec.switchGroup}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        switchGroup: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    LED Color Temperature (Kelvin)
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="e.g. 2700 or 3000"
+                    value={editingSpec.colorTempKelvin}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        colorTempKelvin: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                  />
+                </div>
+
+                {/* Row 7: Sourcing / Vendor Product URL & Product Photo URL */}
+                <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-400 font-medium">
+                        Sourcing / Vendor Product URL (productUrl)
+                      </label>
+                      {editingSpec.productUrl && (
+                        <a
+                          href={editingSpec.productUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 underline"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                          Open Vendor Link
+                        </a>
+                      )}
+                    </div>
+                    <input
+                      placeholder="https://www.homedepot.com/... or https://www.brizo.com/..."
+                      value={editingSpec.productUrl}
+                      onChange={(e) =>
+                        setEditingSpec({
+                          ...editingSpec,
+                          productUrl: e.target.value,
+                        })
+                      }
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1 font-medium">
+                      Product Photo / Swatch Image URL (imageUrl)
+                    </label>
+                    <input
+                      placeholder="https://... or /api/uploads/... (or Upload / Ctrl+V Paste above)"
+                      value={editingSpec.swatchImageUrl}
+                      onChange={(e) =>
+                        setEditingSpec({
+                          ...editingSpec,
+                          swatchImageUrl: e.target.value,
+                        })
+                      }
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Row 8: Technical & Subcontractor Installation Notes */}
+                <div className="md:col-span-3">
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Technical &amp; Subcontractor Installation Notes (specNotes
+                    / tradeNotes)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editingSpec.installNotes}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        installNotes: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Sticky Footer */}
+            <div className="shrink-0 border-t border-slate-800 px-6 py-3 flex flex-wrap items-center justify-between gap-3 bg-slate-900">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCatalogDrawer(true)}
+                  className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-xs font-semibold text-amber-300 flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                  Pick from KO Builders Catalog
+                </button>
+                {isBuilderAdmin && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      handleDeleteSelectionItem(
+                        editingSpec.id,
+                        editingSpec.productName || editingSpec.componentName,
+                        editingSpec.roomName || "this room"
+                      )
+                    }
+                    className="px-3 py-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/50 text-xs font-semibold text-red-300 flex items-center gap-1.5 whitespace-nowrap transition"
+                    title="Delete Product / Line Item"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                    Delete Item
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setEditingSpec(null)}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 whitespace-nowrap"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEditSpec}
+                  className="px-5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 whitespace-nowrap"
+                >
+                  {savingEditSpec
+                    ? "Saving Specification..."
+                    : "Save Spec & Recalculate Variance"}
+                </button>
+              </div>
+            </div>
           </form>
+        </div>
+      )}
+
+      {/* Showroom Good / Better / Best Curated Catalog Slide-Over Drawer */}
+      <ShowroomCatalogDrawer
+        isOpen={showCatalogDrawer}
+        onClose={() => setShowCatalogDrawer(false)}
+        catalogItems={catalogItems}
+        onApplyCatalogItem={handleApplyCatalogItemFromDrawer}
+        applyingId={applyingCatalogItemId}
+      />
+
+      {/* Upload / Update Project Plans & Non-Destructive Room Sync Modal */}
+      <UpdateProjectPlansModal
+        isOpen={showUpdatePlansModal}
+        project={projectData}
+        onClose={() => setShowUpdatePlansModal(false)}
+        onUpdated={() => {
+          if (projectData?.id) {
+            loadProjectDetail(projectData.id);
+          }
+        }}
+      />
+
+      {/* Share Magic Link & Subcontractor Trade Packets Modal */}
+      {showShareLinksModal && projectData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70">
+          <div className="w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden rounded-2xl bg-slate-900 border border-amber-500/40 shadow-2xl">
+            <div className="shrink-0 border-b border-slate-800 px-6 py-4 flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                  Zero-Login Share Links &amp; HMAC-SHA256 Trade Packets
+                </div>
+                <h3 className="text-lg font-bold text-white mt-0.5">
+                  {projectData.name} — Share Links
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowShareLinksModal(false)}
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5 text-xs">
+              {/* 1. Homeowner Magic Approval Link */}
+              <div className="bg-slate-950 border border-emerald-500/30 rounded-xl p-4 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="font-bold text-emerald-300 text-sm">
+                      Homeowner Magic Approval Link
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Allows {projectData.clientName} to review room selections,
+                      allowance variances, and sign off with digital initials.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={copyMagicShareLink}
+                    className="px-3.5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shrink-0"
+                  >
+                    {copiedMagicLink ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Copied Magic Link!
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy Homeowner Link
+                      </>
+                    )}
+                  </button>
+                </div>
+                <div className="font-mono text-[11px] text-slate-300 bg-slate-900 border border-slate-800 rounded px-3 py-1.5 truncate">
+                  {typeof window !== "undefined" ? window.location.origin : ""}
+                  /?token={projectData.magicAccessToken}
+                </div>
+              </div>
+
+              {/* 2. Per-Trade HMAC-SHA256 Subcontractor Links */}
+              <div className="space-y-2.5">
+                <div>
+                  <div className="font-bold text-sky-300 text-sm">
+                    Tamper-Proof Subcontractor Trade Packet Links (HMAC-SHA256 •
+                    Zero Pricing)
+                  </div>
+                  <p className="text-[11px] text-slate-400">
+                    Each trade generates a dedicated cryptographic token bound
+                    to its exact <code>tradeSlug</code> (including separate{" "}
+                    <strong>Plumbing Fixtures</strong> and{" "}
+                    <strong>Hydronic Radiant</strong> packets). All pricing and
+                    allowances are stripped server-side.
+                  </p>
+                </div>
+
+                <div className="divide-y divide-slate-800 border border-slate-800 rounded-xl overflow-hidden bg-slate-950">
+                  {tradeCategories.map((t) => {
+                    const count = (projectData.selections || []).filter(
+                      (s: any) => s.tradeCategory?.slug === t.slug
+                    ).length;
+                    const path = getTradeScopedFieldUrl(t.slug);
+                    const isCopied = copiedTradeSlug === t.slug;
+                    return (
+                      <div
+                        key={t.slug}
+                        className="px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 hover:bg-slate-900/60"
+                      >
+                        <div className="min-w-0">
+                          <div className="font-semibold text-white flex items-center gap-2">
+                            <span>{t.name}</span>
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-[10px] font-mono text-amber-300">
+                              {t.slug}
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-normal">
+                              ({count} {count === 1 ? "item" : "items"})
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleCopyTokenizedFieldLink(t.slug)
+                            }
+                            className="px-2.5 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 font-semibold text-[11px] flex items-center gap-1"
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span className="text-emerald-300">Copied</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Copy Link</span>
+                              </>
+                            )}
+                          </button>
+                          <Link
+                            href={path}
+                            target="_blank"
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-[11px] flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            <span>Open Packet</span>
+                          </Link>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="shrink-0 border-t border-slate-800 px-6 py-3 flex justify-end bg-slate-900">
+              <button
+                type="button"
+                onClick={() => setShowShareLinksModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -952,9 +2102,12 @@ export default function KOPortalPage() {
               {!isSubcontractor && (
                 <button
                   type="button"
-                  onClick={copyMagicShareLink}
+                  onClick={() => {
+                    copyMagicShareLink();
+                    setShowShareLinksModal(true);
+                  }}
                   className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 flex items-center gap-1.5 border border-slate-700"
-                  title="Copy Homeowner Magic Approval Link"
+                  title="Share Homeowner Magic Link & Subcontractor Trade Packet Links"
                 >
                   {copiedMagicLink ? (
                     <>
@@ -1092,6 +2245,16 @@ export default function KOPortalPage() {
 
                 {/* Print & Export Suite Links */}
                 <div className="flex flex-wrap items-center gap-2">
+                  {isBuilderAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setShowUpdatePlansModal(true)}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs text-amber-300 font-semibold flex items-center gap-1.5"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      Upload / Update Project Plans
+                    </button>
+                  )}
                   {!isSubcontractor && (
                     <Link
                       href={`/projects/${projectData.id}/print/master-takeoff`}
@@ -1108,6 +2271,26 @@ export default function KOPortalPage() {
                     <Printer className="w-3.5 h-3.5" />
                     Subcontractor Trade Packet
                   </Link>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyTokenizedFieldLink()}
+                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-sky-500/40 text-xs text-sky-300 font-semibold flex items-center gap-1.5"
+                    title="Copy Zero-Login Tokenized Field Crew Share Link"
+                  >
+                    {copiedFieldLink ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-300">
+                          Copied Field Link!
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-sky-400" />
+                        <span>Copy Field Link</span>
+                      </>
+                    )}
+                  </button>
                   {!isSubcontractor && (
                     <Link
                       href={`/projects/${projectData.id}/print/closeout-binder`}
@@ -1439,27 +2622,201 @@ export default function KOPortalPage() {
         {showCustomEntryModal && projectData && (
           <form
             onSubmit={handleCreateCustomSelection}
-            className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 shadow-2xl space-y-4"
+            className="bg-slate-900 border border-emerald-500/40 rounded-2xl p-5 shadow-2xl space-y-5"
           >
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-emerald-400" />
-                  Add Custom Product Specification / Web Clipper Entry
+                  Add Custom Product Specification / Smart Web Clipper
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Clip any custom product URL, set Owner-Furnished (OFCI) or
-                  TBD Allowance placeholders, and validate radiant-floor
-                  compatibility.
+                  Paste any vendor product URL (Ferguson, Brizo, Kohler,
+                  Cambria, Kährs, Sherwin-Williams) to auto-extract SKU, finish,
+                  swatch hex, price, photo, and rough-in notes.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setShowCustomEntryModal(false)}
-                className="text-xs text-slate-400 hover:text-white"
+                className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300"
               >
-                Cancel
+                <X className="w-4 h-4" />
               </button>
+            </div>
+
+            {/* Top Smart Web Clipper Bar */}
+            <div className="bg-slate-950/90 border border-emerald-500/30 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-end gap-2.5">
+                <div className="flex-1 min-w-[260px]">
+                  <label className="text-xs font-semibold text-emerald-300 block mb-1">
+                    Vendor / Sourcing Product URL
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://www.brizo.com/kitchen/product/64063LF-GL or https://www.kohler.com/..."
+                    value={customProductUrl}
+                    onChange={(e) => setCustomProductUrl(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 focus:border-emerald-400 rounded-lg px-3 py-2 text-xs text-white outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={clippingProduct}
+                  onClick={handleFetchAndAutoFillClipper}
+                  className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow whitespace-nowrap transition"
+                >
+                  {clippingProduct ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Fetching & Auto-Filling...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Fetch & Auto-Fill Details
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowClipperRawTextBox(!showClipperRawTextBox)
+                  }
+                  className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 whitespace-nowrap"
+                >
+                  {showClipperRawTextBox
+                    ? "Hide Pasted Text Box"
+                    : "Or paste copied product page text"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowBookmarkletHelper(!showBookmarkletHelper)
+                  }
+                  className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-xs font-semibold text-amber-300 whitespace-nowrap"
+                >
+                  {showBookmarkletHelper
+                    ? "Hide 1-Click Bookmarklet"
+                    : "1-Click Browser Bookmarklet (Home Depot / Lowe's)"}
+                </button>
+              </div>
+
+              {/* Collapsible 1-Click "KO Clipper" Browser Bookmarklet Generator Card */}
+              {showBookmarkletHelper && (
+                <div className="bg-slate-900/95 border border-amber-500/40 rounded-xl p-3.5 space-y-2.5 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-amber-300 flex items-center gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Clip Directly from Any Open Browser Tab (Home Depot /
+                        Lowe&apos;s / Ferguson / Kohler)
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        1. Drag the{" "}
+                        <strong className="text-white">
+                          📎 Clip to KO Studio
+                        </strong>{" "}
+                        button below onto your Chrome Bookmarks Bar (or copy the
+                        bookmarklet code). 2. While viewing any product on Home
+                        Depot or Lowe&apos;s, click{" "}
+                        <strong className="text-white">
+                          Clip to KO Studio
+                        </strong>{" "}
+                        on your Bookmarks Bar — then switch back to this tab and
+                        all fields auto-fill!
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <a
+                        ref={(el) => {
+                          if (el) {
+                            el.setAttribute(
+                              "href",
+                              getKoClipperBookmarkletCode()
+                            );
+                          }
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setClipperMessage(
+                            "Drag this '📎 Clip to KO Studio' button up to your Chrome Bookmarks Bar, then click it while viewing any Home Depot or Lowe's product page!"
+                          );
+                        }}
+                        draggable
+                        className="px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-md cursor-grab active:cursor-grabbing flex items-center gap-1.5 whitespace-nowrap select-none"
+                        title="Drag me to your Chrome Bookmarks Bar!"
+                      >
+                        <span>📎 Clip to KO Studio</span>
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={handleCopyBookmarkletCode}
+                        className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 flex items-center gap-1.5 whitespace-nowrap"
+                        title="Copy javascript:... bookmarklet URL to paste into a new Chrome bookmark"
+                      >
+                        {copiedBookmarklet ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-300">
+                              Copied Bookmarklet Code!
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Copy Bookmarklet Code</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => checkAndImportBookmarkletClip(false)}
+                        className="px-3 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-xs font-semibold text-emerald-300 flex items-center gap-1.5 whitespace-nowrap"
+                        title="Pull the latest product clipped from your browser bookmarklet or clipboard"
+                      >
+                        <ClipboardPaste className="w-3.5 h-3.5" />
+                        <span>Import Bookmarklet Clip</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {showClipperRawTextBox && (
+                <div className="space-y-1.5 pt-1">
+                  <label className="text-[11px] text-slate-400 block">
+                    Fallback: Paste copied product page text or spec sheet text
+                    below and click <strong>Fetch & Auto-Fill Details</strong>:
+                  </label>
+                  <textarea
+                    rows={3}
+                    placeholder="Paste copied product title, SKU, finish (e.g. Vibrant Brushed Moderne Brass), price ($489.00), and flow rate / rough-in specs..."
+                    value={clipperRawText}
+                    onChange={(e) => setClipperRawText(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none"
+                  />
+                </div>
+              )}
+
+              {clipperMessage && (
+                <div
+                  className={`rounded-lg px-3 py-2 text-xs flex items-center gap-2 ${
+                    clipperBlocked
+                      ? "bg-amber-500/15 border border-amber-500/40 text-amber-200"
+                      : "bg-emerald-500/15 border border-emerald-500/40 text-emerald-200"
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{clipperMessage}</span>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
@@ -1484,7 +2841,11 @@ export default function KOPortalPage() {
                 <select
                   value={customTradeId}
                   onChange={(e) => setCustomTradeId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
                 >
                   {tradeCategories.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -1519,7 +2880,11 @@ export default function KOPortalPage() {
                   placeholder="e.g. Scullery Prep Faucet"
                   value={customComponentName}
                   onChange={(e) => setCustomComponentName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
                 />
               </div>
               <div>
@@ -1528,46 +2893,105 @@ export default function KOPortalPage() {
                   placeholder="e.g. Brizo / Kohler"
                   value={customManufacturer}
                   onChange={(e) => setCustomManufacturer(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
                 />
               </div>
               <div>
                 <label className="text-slate-400 block mb-1">
-                  Product Model Name
+                  Product Name
                 </label>
                 <input
                   placeholder="e.g. Litze Articulating Prep Faucet"
                   value={customProductName}
                   onChange={(e) => setCustomProductName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
                 />
               </div>
               <div>
-                <label className="text-slate-400 block mb-1">SKU</label>
+                <label className="text-slate-400 block mb-1">
+                  Model Number / SKU
+                </label>
                 <input
                   placeholder="e.g. 64063LF-GL"
                   value={customSku}
                   onChange={(e) => setCustomSku(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white font-mono"
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white font-mono transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">Finish</label>
+                <input
+                  placeholder="Vibrant Brushed Moderne Brass"
+                  value={customFinish}
+                  onChange={(e) => setCustomFinish(e.target.value)}
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
                 />
               </div>
 
               <div>
                 <label className="text-slate-400 block mb-1">
-                  Finish / Color Name & Swatch
+                  Color Name & Code
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    placeholder="Brushed Luxe Gold"
+                    value={customColorName}
+                    onChange={(e) => setCustomColorName(e.target.value)}
+                    className={`flex-1 bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                      clipperHighlight
+                        ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                        : "border-slate-700"
+                    }`}
+                  />
+                  <input
+                    placeholder="2MB"
+                    value={customColorCode}
+                    onChange={(e) => setCustomColorCode(e.target.value)}
+                    className={`w-16 bg-slate-950 border rounded-lg px-2 py-2 text-white font-mono transition ${
+                      clipperHighlight
+                        ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                        : "border-slate-700"
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1">
+                  Live Color Swatch Picker (colorHex)
                 </label>
                 <div className="flex gap-1.5">
                   <input
                     type="color"
                     value={customColorHex}
                     onChange={(e) => setCustomColorHex(e.target.value)}
-                    className="w-9 h-9 bg-slate-950 border border-slate-700 rounded cursor-pointer"
+                    className="w-9 h-9 bg-slate-950 border border-slate-700 rounded cursor-pointer shrink-0"
                   />
                   <input
-                    placeholder="Brushed Luxe Gold"
-                    value={customColorName}
-                    onChange={(e) => setCustomColorName(e.target.value)}
-                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
+                    value={customColorHex}
+                    onChange={(e) => setCustomColorHex(e.target.value)}
+                    className={`flex-1 bg-slate-950 border rounded-lg px-2.5 py-2 text-white font-mono transition ${
+                      clipperHighlight
+                        ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                        : "border-slate-700"
+                    }`}
                   />
                 </div>
               </div>
@@ -1590,7 +3014,10 @@ export default function KOPortalPage() {
                   >
                     <option value="each">each</option>
                     <option value="sq ft">sq ft</option>
+                    <option value="lf">lf</option>
                     <option value="lin ft">lin ft</option>
+                    <option value="set">set</option>
+                    <option value="lot">lot</option>
                     <option value="allowance lump sum">lump sum</option>
                   </select>
                 </div>
@@ -1603,13 +3030,19 @@ export default function KOPortalPage() {
                 <div className="flex gap-1.5">
                   <input
                     type="number"
+                    step="0.01"
                     disabled={customIsOfci}
                     value={customIsOfci ? 0 : customUnitCost}
                     onChange={(e) => setCustomUnitCost(Number(e.target.value))}
-                    className="w-1/2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white font-mono"
+                    className={`w-1/2 bg-slate-950 border rounded-lg px-2 py-2 text-white font-mono transition ${
+                      clipperHighlight
+                        ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                        : "border-slate-700"
+                    }`}
                   />
                   <input
                     type="number"
+                    step="0.01"
                     value={customAllowance}
                     onChange={(e) => setCustomAllowance(Number(e.target.value))}
                     className="w-1/2 bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-white font-mono"
@@ -1617,7 +3050,32 @@ export default function KOPortalPage() {
                 </div>
               </div>
 
-              <div className="flex flex-col justify-center gap-1.5 pt-3">
+              <div className="md:col-span-2">
+                <label className="text-slate-400 block mb-1">
+                  Product Image URL (swatchImageUrl)
+                </label>
+                <div className="flex items-center gap-2">
+                  {customSwatchImageUrl && (
+                    <img
+                      src={customSwatchImageUrl}
+                      alt="Clipped preview"
+                      className="w-9 h-9 rounded border border-slate-700 object-cover shrink-0"
+                    />
+                  )}
+                  <input
+                    placeholder="https://... (auto-filled from OpenGraph / JSON-LD)"
+                    value={customSwatchImageUrl}
+                    onChange={(e) => setCustomSwatchImageUrl(e.target.value)}
+                    className={`flex-1 bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                      clipperHighlight
+                        ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                        : "border-slate-700"
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col justify-center gap-1.5 pt-2">
                 <label className="flex items-center gap-2 text-slate-200">
                   <input
                     type="checkbox"
@@ -1638,34 +3096,35 @@ export default function KOPortalPage() {
                 </label>
               </div>
 
-              <div className="md:col-span-2">
+              <div className="md:col-span-4">
                 <label className="text-slate-400 block mb-1">
-                  Web Clipper Product URL (Optional)
+                  Technical / Trade Specification Notes (GPM, Rough-In,
+                  Mounting, CF8i / 2x4 Backing)
                 </label>
                 <input
-                  placeholder="https://..."
-                  value={customProductUrl}
-                  onChange={(e) => setCustomProductUrl(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="text-slate-400 block mb-1">
-                  Field Rough-In & Installation Notes
-                </label>
-                <input
-                  placeholder="Mounting height, backing plate, or CF8i sleeve instructions..."
+                  placeholder="Mounting height, GPM flow rate, hole count, or CF8i sleeve instructions..."
                   value={customInstallNotes}
                   onChange={(e) => setCustomInstallNotes(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-2 text-white"
+                  className={`w-full bg-slate-950 border rounded-lg px-2.5 py-2 text-white transition ${
+                    clipperHighlight
+                      ? "border-emerald-400 ring-1 ring-emerald-400/50"
+                      : "border-slate-700"
+                  }`}
                 />
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowCustomEntryModal(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300"
+              >
+                Cancel
+              </button>
               <button
                 type="submit"
-                className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs"
+                className="px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg"
               >
                 Save Specification to Project
               </button>
@@ -1676,7 +3135,9 @@ export default function KOPortalPage() {
         {/* Mode-Specific Views */}
         {contextMode === "FLOOR_PLAN" && projectData ? (
           <FloorPlanCanvas
+            project={projectData}
             rooms={projectData.rooms || []}
+            selections={projectData.selections || []}
             selectedRoomId={
               selectedRoomId === "ALL"
                 ? projectData.rooms?.[0]?.id
@@ -1684,7 +3145,9 @@ export default function KOPortalPage() {
             }
             onSelectRoom={(id) => setSelectedRoomId(id)}
             canEdit={!isSubcontractor}
+            isBuilderAdmin={isBuilderAdmin}
             onRoomUpdated={() => loadProjectDetail(projectData.id)}
+            onOpenUpdatePlansModal={() => setShowUpdatePlansModal(true)}
             interiorFramingType={projectData.interiorFramingType}
           />
         ) : contextMode === "OPENING_SCHEDULE" && projectData ? (
@@ -1782,6 +3245,45 @@ export default function KOPortalPage() {
         ) : (
           /* Dual-Context Matrix (Room × Trade × Phase) */
           <div className="space-y-5">
+            {/* Interactive Visual Floor-Plan Pin Mapper on Project Overview / Room-by-Room View */}
+            {contextMode === "ROOM_MATRIX" && projectData && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                    Interactive Visual Floor-Plan Pin Mapper (Overview & Room-by-Room)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowOverviewPinMap(!showOverviewPinMap)}
+                    className="px-2.5 py-1 rounded bg-slate-900 border border-slate-800 text-xs text-slate-300 hover:text-white"
+                  >
+                    {showOverviewPinMap
+                      ? "Collapse Floor Plan Map"
+                      : "Expand Floor Plan Map"}
+                  </button>
+                </div>
+                {showOverviewPinMap && (
+                  <FloorPlanCanvas
+                    project={projectData}
+                    rooms={projectData.rooms || []}
+                    selections={projectData.selections || []}
+                    selectedRoomId={
+                      selectedRoomId === "ALL"
+                        ? projectData.rooms?.[0]?.id
+                        : selectedRoomId
+                    }
+                    onSelectRoom={(id) => setSelectedRoomId(id)}
+                    canEdit={!isSubcontractor}
+                    isBuilderAdmin={isBuilderAdmin}
+                    onRoomUpdated={() => loadProjectDetail(projectData.id)}
+                    onOpenUpdatePlansModal={() => setShowUpdatePlansModal(true)}
+                    interiorFramingType={projectData.interiorFramingType}
+                    compactMode
+                  />
+                )}
+              </div>
+            )}
+
             {/* Filter Bar + Bulk Room Approval Action */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2.5">
@@ -1801,19 +3303,56 @@ export default function KOPortalPage() {
                   ))}
                 </select>
 
-                {/* Trade Filter */}
-                <select
-                  value={selectedTradeSlug}
-                  onChange={(e) => setSelectedTradeSlug(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
-                >
-                  <option value="ALL">All Trade Categories (11)</option>
-                  {tradeCategories.map((t) => (
-                    <option key={t.id} value={t.slug}>
-                      Trade: {t.name}
+                {/* Trade Filter + One-Click Copy Field Link when a Trade is active */}
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={selectedTradeSlug}
+                    onChange={(e) => setSelectedTradeSlug(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                  >
+                    <option value="ALL">
+                      All Trade Categories ({tradeCategories.length || 12})
                     </option>
-                  ))}
-                </select>
+                    {tradeCategories.map((t) => (
+                      <option key={t.id} value={t.slug}>
+                        Trade: {t.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedTradeSlug !== "ALL" && projectData && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyTokenizedFieldLink(selectedTradeSlug)
+                        }
+                        className="px-3 py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow whitespace-nowrap transition"
+                        title={`Copy trade-locked zero-login field link for ${selectedTradeSlug}`}
+                      >
+                        {copiedFieldLink ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            Copied Field Link!
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            Copy Field Link
+                          </>
+                        )}
+                      </button>
+                      <Link
+                        href={getTradeScopedFieldUrl(selectedTradeSlug)}
+                        target="_blank"
+                        className="p-2 rounded-lg bg-slate-950 hover:bg-slate-800 border border-sky-500/40 text-sky-300"
+                        title="Open Trade-Locked Field Link in New Tab"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </Link>
+                    </>
+                  )}
+                </div>
 
                 {/* Phase Gateway Filter */}
                 <select
@@ -1868,6 +3407,69 @@ export default function KOPortalPage() {
                 </div>
               )}
             </div>
+
+            {/* View B: Trade-by-Trade Filter Pills & Quick Subcontractor Share Bar */}
+            {contextMode === "TRADE_MATRIX" && (
+              <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-sky-400 flex items-center gap-1.5">
+                    <Wrench className="w-3.5 h-3.5" />
+                    View B: Trade-by-Trade Specification Filter Pills (
+                    {tradeCategories.length} Trades)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowShareLinksModal(true)}
+                    className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/40 text-[11px] font-semibold text-sky-300 flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" />
+                    Share Trade Packet Links
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTradeSlug("ALL")}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                      selectedTradeSlug === "ALL"
+                        ? "bg-amber-500 text-slate-950 shadow"
+                        : "bg-slate-950 border border-slate-800 text-slate-300 hover:border-slate-700"
+                    }`}
+                  >
+                    All Trades ({projectData?.selections?.length || 0})
+                  </button>
+                  {tradeCategories.map((t) => {
+                    const count = (projectData?.selections || []).filter(
+                      (s: any) => s.tradeCategory?.slug === t.slug
+                    ).length;
+                    const isActive = selectedTradeSlug === t.slug;
+                    return (
+                      <button
+                        key={t.slug}
+                        type="button"
+                        onClick={() => setSelectedTradeSlug(t.slug)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+                          isActive
+                            ? "bg-amber-500 text-slate-950 shadow"
+                            : "bg-slate-950 border border-slate-800 text-slate-300 hover:border-slate-700"
+                        }`}
+                      >
+                        <span>{t.name}</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                            isActive
+                              ? "bg-slate-950/20 text-slate-950"
+                              : "bg-slate-800 text-amber-300"
+                          }`}
+                        >
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Selection Cards List */}
             <div className="space-y-3">
@@ -2204,11 +3806,28 @@ export default function KOPortalPage() {
                                 type="button"
                                 onClick={() => openEditSpecModal(item)}
                                 className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-[11px] font-semibold text-amber-300 flex items-center gap-1 shrink-0 transition"
-                                title="Edit Spec / Custom Color"
+                                title="Edit Spec"
                               >
                                 <Pencil className="w-3 h-3" />
-                                Edit Spec / Custom Color
+                                Edit Spec
                               </button>
+
+                              {isBuilderAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDeleteSelectionItem(
+                                      item.id,
+                                      item.productName || item.componentName,
+                                      item.room?.name || "this room"
+                                    )
+                                  }
+                                  className="px-2 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 border border-red-500/50 text-[11px] font-semibold text-red-300 flex items-center gap-1 shrink-0 transition"
+                                  title={`Delete '${item.productName || item.componentName}' from ${item.room?.name || "room"}`}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-1.5">

@@ -6,10 +6,15 @@ import {
   computeCF8iJambDepth,
 } from "@/lib/construction-rules";
 import { generateAutoSeedSelectionsForRoom } from "@/lib/plan-parser";
-import { seedDatabase } from "@/lib/seed-data";
+import {
+  ensureSplitPlumbingAndRadiantTrades,
+  seedDatabase,
+} from "@/lib/seed-data";
 
 export async function GET() {
   try {
+    await ensureSplitPlumbingAndRadiantTrades();
+
     let projects = await prisma.project.findMany({
       orderBy: [{ isTemplate: "asc" }, { createdAt: "asc" }],
       select: {
@@ -43,11 +48,15 @@ export async function GET() {
       });
     }
 
-    const [sessionUser, tradeCategories, catalogPresets] = await Promise.all([
-      getSessionUser(),
-      prisma.tradeCategory.findMany({ orderBy: { sortOrder: "asc" } }),
-      prisma.catalogPreset.findMany({ orderBy: { manufacturer: "asc" } }),
-    ]);
+    const [sessionUser, tradeCategories, catalogPresets, catalogItems] =
+      await Promise.all([
+        getSessionUser(),
+        prisma.tradeCategory.findMany({ orderBy: { sortOrder: "asc" } }),
+        prisma.catalogPreset.findMany({ orderBy: { manufacturer: "asc" } }),
+        prisma.catalogItem.findMany({
+          orderBy: [{ category: "asc" }, { unitCost: "asc" }],
+        }),
+      ]);
 
     return NextResponse.json({
       projects,
@@ -61,6 +70,14 @@ export async function GET() {
               return copy;
             })
           : catalogPresets,
+      catalogItems:
+        sessionUser.role === "SUBCONTRACTOR"
+          ? catalogItems.map((c) => {
+              const copy: Record<string, any> = { ...c };
+              delete copy.unitCost;
+              return copy;
+            })
+          : catalogItems,
     });
   } catch (err: any) {
     return NextResponse.json(

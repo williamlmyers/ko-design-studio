@@ -5,6 +5,36 @@ export const PHASE_GATEWAYS = [
   "Phase 4: Final Trim, Hardware, Grilles & Appliances",
 ] as const;
 
+export const TradeCategoryEnum = {
+  CONCRETE_NUFORM_CF8I: "concrete-nuform-cf8i",
+  FRAMING_DRYWALL: "framing-drywall",
+  WINDOWS_DOORS_TRIM: "windows-doors-trim",
+  PLUMBING_FIXTURES: "plumbing-fixtures",
+  HYDRONIC_RADIANT: "hydronic-radiant",
+  HVAC_IAQ: "hvac-iaq",
+  ELECTRICAL_LIGHTING: "electrical-lighting",
+  CABINETRY_MILLWORK: "cabinetry-millwork",
+  COUNTERTOPS_STONE: "countertops-stone",
+  FLOORING_TILE: "flooring-tile",
+  PAINT_FINISHES: "paint-finishes",
+  APPLIANCES: "appliances",
+} as const;
+
+export const TRADE_CATEGORY_LABELS: Record<string, string> = {
+  "concrete-nuform-cf8i": "Concrete / Nuform CF8i Shell & Exterior Trim",
+  "framing-drywall": "Interior Framing (2x4 Metal/Wood) & Drywall",
+  "windows-doors-trim": "Windows, Exterior Doors, Trim & Hardware",
+  "plumbing-fixtures": "Plumbing Fixtures",
+  "hydronic-radiant": "Hydronic Radiant",
+  "hvac-iaq": "HVAC & Indoor Air Quality (ERV / Heat Pump)",
+  "electrical-lighting": "Electrical, Architectural Lighting & Low-Voltage",
+  "cabinetry-millwork": "Cabinetry & Architectural Millwork",
+  "countertops-stone": "Countertops & Stone Fabrication",
+  "flooring-tile": "Flooring & Ceramic/Porcelain Tile",
+  "paint-finishes": "Paint & Wall Coatings",
+  appliances: "Appliances",
+};
+
 export const SELECTION_STATUSES = [
   "TBD / Carrying Allowance",
   "Pending Client Input",
@@ -60,35 +90,138 @@ export function computeCF8iJambDepth(
 }
 
 /**
- * Calculates room metrics and paint/drywallable wall area respecting CF8i interior finish rules.
+ * Calculates room metrics:
+ * - floorAreaSqFt = lengthFt * widthFt
+ * - perimeterLinFt = 2 * (lengthFt + widthFt)
+ * - netWallAreaSqFt (wallArea) = perimeterLinFt * ceilingHeightFt
  */
 export function calculateRoomMetrics(input: {
   lengthFt: number;
   widthFt: number;
   ceilingHeightFt: number;
   interiorPartitionSqFt?: number;
-  cf8iInteriorFinish: string;
+  cf8iInteriorFinish?: string;
 }) {
   const floorAreaSqFt = Number((input.lengthFt * input.widthFt).toFixed(1));
-  const perimeterLinFt = Number((2 * (input.lengthFt + input.widthFt)).toFixed(1));
-  const grossPerimeterWallSqFt = Number((perimeterLinFt * input.ceilingHeightFt).toFixed(1));
+  const perimeterLinFt = Number(
+    (2 * (input.lengthFt + input.widthFt)).toFixed(1)
+  );
+  const wallAreaSqFt = Number(
+    (perimeterLinFt * input.ceilingHeightFt).toFixed(1)
+  );
   const partitionSqFt =
     typeof input.interiorPartitionSqFt === "number"
       ? input.interiorPartitionSqFt
-      : Number((grossPerimeterWallSqFt * 0.45).toFixed(1));
-
-  // If CF8i wall is left as Exposed Nuform Polymer White/Tan, exclude CF8i perimeter walls from drywall/paint
-  const isExposedPolymer = input.cf8iInteriorFinish.includes("Exposed Nuform Polymer");
-  const netWallAreaSqFt = isExposedPolymer
-    ? Number(partitionSqFt.toFixed(1))
-    : Number((grossPerimeterWallSqFt * 0.85 + partitionSqFt).toFixed(1));
+      : Number((wallAreaSqFt * 0.45).toFixed(1));
 
   return {
     floorAreaSqFt,
     perimeterLinFt,
     interiorPartitionSqFt: partitionSqFt,
-    netWallAreaSqFt,
+    netWallAreaSqFt: wallAreaSqFt,
   };
+}
+
+/**
+ * Determines the new cascaded takeoff quantity for a SelectionItem when its
+ * parent Room's dimensions (lengthFt, widthFt, ceilingHeightFt) change:
+ * - Flooring / ceiling / radiant slab sq ft items -> floorAreaSqFt (L * W)
+ * - Drywall / framing / paint / wall finish sq ft items -> netWallAreaSqFt (perimeter * H)
+ * - Baseboard / trim / linear items (lf, lin ft, linear ft) -> perimeterLinFt (2 * (L + W))
+ * - Fixture / count / lump-sum items (each, set, pair, lot) -> null (leave untouched)
+ */
+export function resolveCascadedTakeoffQty(
+  item: {
+    unitType?: string | null;
+    componentName?: string | null;
+    productName?: string | null;
+    tradeCategory?: { slug?: string | null } | null;
+  },
+  metrics: {
+    floorAreaSqFt: number;
+    perimeterLinFt: number;
+    netWallAreaSqFt: number;
+  }
+): number | null {
+  const unit = (item.unitType || "").trim().toLowerCase();
+
+  // Leave fixture/count/lump-sum items untouched
+  if (
+    !unit ||
+    unit === "each" ||
+    unit === "ea" ||
+    unit === "set" ||
+    unit === "pair" ||
+    unit === "lot" ||
+    unit.includes("lump") ||
+    unit.includes("allowance")
+  ) {
+    return null;
+  }
+
+  // Linear items (lf, lin ft, linear ft) -> perimeter
+  if (
+    unit === "lf" ||
+    unit === "lin ft" ||
+    unit === "linear ft" ||
+    unit === "linear feet"
+  ) {
+    return metrics.perimeterLinFt;
+  }
+
+  // Area items (sq ft, sqft, sf)
+  if (
+    unit === "sq ft" ||
+    unit === "sqft" ||
+    unit === "sf" ||
+    unit === "square feet"
+  ) {
+    const tradeSlug = (item.tradeCategory?.slug || "").toLowerCase();
+    const text = `${item.componentName || ""} ${
+      item.productName || ""
+    }`.toLowerCase();
+
+    if (
+      tradeSlug === "paint-finishes" ||
+      tradeSlug === "framing-drywall" ||
+      tradeSlug === "concrete-nuform-cf8i" ||
+      text.includes("drywall") ||
+      text.includes("paint") ||
+      text.includes("framing") ||
+      text.includes("wall") ||
+      text.includes("cf8i") ||
+      text.includes("cladding") ||
+      text.includes("siding")
+    ) {
+      return metrics.netWallAreaSqFt;
+    }
+
+    if (
+      tradeSlug === "flooring-tile" ||
+      tradeSlug === "hydronic-radiant" ||
+      tradeSlug === "plumbing-hydronic" ||
+      text.includes("floor") ||
+      text.includes("tile") ||
+      text.includes("plank") ||
+      text.includes("lvp") ||
+      text.includes("hardwood") ||
+      text.includes("slab") ||
+      text.includes("radiant") ||
+      text.includes("pex") ||
+      text.includes("ceiling")
+    ) {
+      return metrics.floorAreaSqFt;
+    }
+
+    // Leave custom countertop slab sq ft untouched unless it's a floor/wall trade
+    if (tradeSlug === "countertops-stone") {
+      return null;
+    }
+
+    return metrics.floorAreaSqFt;
+  }
+
+  return null;
 }
 
 /**
@@ -207,10 +340,21 @@ export function getFramingContextNote(
       ? "2x4 Light-Gauge Metal Framing (20-ga EQ studs @ 16\" O.C.): Use fine-thread self-drilling drywall screws, mineral wool acoustic batts, and 16-ga sheet-metal/fire-treated wood backing plates at all cabinet/vanity/TV walls."
       : "2x4 Kiln-Dried Wood Framing (@ 16\" O.C.): Use coarse-thread drywall screws, standard 2x6/2x8 solid wood blocking at vanities/cabinets/TV mounts, and acoustic batt insulation.";
   }
-  if (tradeSlug === "plumbing-hydronic" || tradeSlug === "electrical-lighting") {
+  if (
+    tradeSlug === "plumbing-fixtures" ||
+    tradeSlug === "plumbing-hydronic"
+  ) {
     return isMetal
-      ? "Metal Stud Requirement: Install snap-in plastic/neoprene grommet bushings in all 2x4 metal stud web knockouts before pulling PEX or Romex/Cat6."
-      : "Wood Stud Requirement: Bore centered 1-1/4\" holes and install 16-ga steel nail plates wherever piping/wiring is within 1-1/4\" of stud face.";
+      ? "Plumbing Fixtures & Rough-In (2x4 Metal Studs + Nuform CF8i): Install snap-in plastic/neoprene grommet bushings in all 2x4 metal stud web knockouts before pulling PEX-a lines; anchor thermostatic shower rough-in valves (verify 2-3/4\" plaster guard depth) and wall-hung vanity/carrier brackets to 16-ga sheet-metal + 3/4\" fire-treated plywood backing bridges; pre-sleeve all exterior hose bibs & waste penetrations through Nuform CF8i 7-7/8\" concrete wall prior to pour."
+      : "Plumbing Fixtures & Rough-In (2x4 Wood Studs + Nuform CF8i): Bore centered 1-1/4\" holes and install 16-ga steel nail plates on 2x4 wood studs; mount thermostatic shower rough-in valves (verify 2-3/4\" plaster guard depth) and vanity brackets to solid 2x8 wood blocking; pre-sleeve all exterior hose bibs & waste penetrations through Nuform CF8i 7-7/8\" concrete wall prior to pour.";
+  }
+  if (tradeSlug === "hydronic-radiant") {
+    return "Hydronic Radiant Concrete Slab & Nuform CF8i Thermal Envelope: Staple 1/2\" oxygen-barrier PEX-a loops @ 9\" O.C. over 2\" high-density underslab EPS insulation; install continuous R-10 closed-cell foam thermal break along Nuform CF8i 7-7/8\" perimeter foundation wall junction (5.47\" concrete core + 2.13\" exterior polyurethane insulation); maintain 100 PSI pressure test during concrete pour and keep loops 6\" clear of toilet flanges and door sills.";
+  }
+  if (tradeSlug === "electrical-lighting") {
+    return isMetal
+      ? "Metal Stud Requirement: Install snap-in plastic/neoprene grommet bushings in all 2x4 metal stud web knockouts before pulling Romex/Cat6."
+      : "Wood Stud Requirement: Bore centered 1-1/4\" holes and install 16-ga steel nail plates wherever wiring is within 1-1/4\" of stud face.";
   }
   if (tradeSlug === "cabinetry-millwork") {
     return isMetal

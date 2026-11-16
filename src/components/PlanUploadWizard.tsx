@@ -12,6 +12,13 @@ import {
   Loader2,
 } from "lucide-react";
 import { CF8I_FINISH_OPTIONS } from "@/lib/construction-rules";
+import {
+  extractPdfPageThumbnails,
+  PdfPagePreview,
+  renderPdfPageAt2xToPngBlob,
+  uploadBlobViaStorageAdapter,
+} from "@/lib/pdf-floorplan-extractor";
+import { PdfSheetPicker } from "./PdfSheetPicker";
 
 interface PlanUploadWizardProps {
   existingProjects: any[];
@@ -28,11 +35,17 @@ export function PlanUploadWizard({
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [uploadedFileUrl, setUploadedFileUrl] = useState<string>("");
+  const [fullPdfPacketUrl, setFullPdfPacketUrl] = useState<string>("");
   const [uploadedFileName, setUploadedFileName] = useState<string>("");
   const [parserMetadata, setParserMetadata] = useState<{
     parserSource: string;
     modelUsed: string;
   } | null>(null);
+
+  // Multi-Page PDF Sheet Selector State
+  const [selectedPdfFile, setSelectedPdfFile] = useState<File | null>(null);
+  const [pdfPagePreviews, setPdfPagePreviews] = useState<PdfPagePreview[]>([]);
+  const [selectedPdfPageNum, setSelectedPdfPageNum] = useState<number>(1);
 
   // Project Staging State
   const [projectName, setProjectName] = useState("");
@@ -64,52 +77,61 @@ export function PlanUploadWizard({
   async function runUploadAndParse(file?: File) {
     setUploading(true);
     try {
-      let publicUrl = "/titko-floorplan-preview.svg";
-      let fileName = file?.name || "Custom-ICF-Architectural-Set-A101.pdf";
-      let mimeType = file?.type || "application/pdf";
+      let floorPlanBgUrl = "/titko-floorplan-preview.svg";
+      let pdfUrlForParser = "/titko-floorplan-preview.svg";
+      const fileName = file?.name || "Custom-ICF-Architectural-Set-A101.pdf";
+      const mimeType = file?.type || "application/pdf";
 
       if (file) {
-        // Step 1: Check signed URL adapter (`POST /api/upload/signed-url`)
-        const signedRes = await fetch("/api/upload/signed-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileName: file.name }),
-        });
-        const signedData = await signedRes.json();
+        const isPdf =
+          file.type === "application/pdf" ||
+          file.name.toLowerCase().endsWith(".pdf");
 
-        if (signedData.mode === "supabase" && signedData.signedUrl) {
-          await fetch(signedData.signedUrl, {
-            method: "PUT",
-            body: file,
-            headers: {
-              "Content-Type": file.type || "application/pdf",
-            },
-          });
-          publicUrl = signedData.publicUrl;
+        if (isPdf) {
+          setSelectedPdfFile(file);
+          const { pages, autoSelectedPage } = await extractPdfPageThumbnails(
+            file
+          );
+          setPdfPagePreviews(pages);
+          setSelectedPdfPageNum(autoSelectedPage);
+
+          const pngBlob = await renderPdfPageAt2xToPngBlob(
+            file,
+            autoSelectedPage
+          );
+          const baseSafeName = file.name.replace(/\.[^/.]+$/, "");
+          const pngFileName = `${baseSafeName}-sheet-${autoSelectedPage}-2x.png`;
+
+          // Dual Upload: 1) Full multi-page PDF packet for Gemini parser, 2) 2x extracted floor-plan PNG for 2D Pin Mapper
+          const [uploadedPdfUrl, uploadedPngUrl] = await Promise.all([
+            uploadBlobViaStorageAdapter(file, file.name),
+            uploadBlobViaStorageAdapter(pngBlob, pngFileName),
+          ]);
+
+          pdfUrlForParser = uploadedPdfUrl;
+          floorPlanBgUrl = uploadedPngUrl;
+          setFullPdfPacketUrl(uploadedPdfUrl);
         } else {
-          // Local disk fallback (`POST /api/upload`)
-          const formData = new FormData();
-          formData.append("file", file);
-          const localRes = await fetch("/api/upload", {
-            method: "POST",
-            body: formData,
-          });
-          const localData = await localRes.json();
-          if (localData.publicUrl) {
-            publicUrl = localData.publicUrl;
-          }
+          setSelectedPdfFile(null);
+          setPdfPagePreviews([]);
+          const uploadedImgUrl = await uploadBlobViaStorageAdapter(
+            file,
+            file.name
+          );
+          floorPlanBgUrl = uploadedImgUrl;
+          pdfUrlForParser = uploadedImgUrl;
         }
       }
 
-      setUploadedFileUrl(publicUrl);
+      setUploadedFileUrl(floorPlanBgUrl);
       setUploadedFileName(fileName);
 
-      // Step 2: Decompose architectural plans via `POST /api/projects/parse-plan`
+      // Decompose architectural plans via `POST /api/projects/parse-plan`
       const parseRes = await fetch("/api/projects/parse-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fileUrl: publicUrl,
+          fileUrl: pdfUrlForParser,
           fileName,
           mimeType,
         }),
@@ -126,6 +148,27 @@ export function PlanUploadWizard({
       setStagedRooms(parsed.rooms || []);
       setStagedOpenings(parsed.openings || []);
       setStep("staging");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleSelectPdfSheetInWizard(pageNumber: number) {
+    setSelectedPdfPageNum(pageNumber);
+    if (!selectedPdfFile) return;
+    setUploading(true);
+    try {
+      const pngBlob = await renderPdfPageAt2xToPngBlob(
+        selectedPdfFile,
+        pageNumber
+      );
+      const baseSafeName = selectedPdfFile.name.replace(/\.[^/.]+$/, "");
+      const pngFileName = `${baseSafeName}-sheet-${pageNumber}-2x.png`;
+      const uploadedPngUrl = await uploadBlobViaStorageAdapter(
+        pngBlob,
+        pngFileName
+      );
+      setUploadedFileUrl(uploadedPngUrl);
     } finally {
       setUploading(false);
     }
@@ -242,23 +285,27 @@ export function PlanUploadWizard({
             <div>
               <h3 className="text-base font-semibold text-white flex items-center gap-2">
                 <FileUp className="w-4 h-4 text-amber-400" />
-                Option 1: AI Architectural Plan Uploader (PDF / PNG / JPG)
+                Option 1: AI Architectural Plan Uploader (Multi-Page PDF / PNG /
+                JPG)
               </h3>
               <p className="text-xs text-slate-400 mt-1">
-                Uploads your floor plan via{" "}
-                <code className="text-amber-300">src/lib/storage.ts</code>{" "}
-                (Supabase signed URL in cloud or{" "}
-                <code className="text-amber-300">/public/uploads/</code>{" "}
-                locally) and decomposes rooms, dimensions, Nuform{" "}
-                <code className="text-amber-300">CF8i</code> exterior/garage
-                fire walls, window/door schedules, and room selection
-                checklists.
+                Multi-page `.pdf` packets automatically render page thumbnails
+                in the browser, auto-select the{" "}
+                <strong className="text-amber-300">
+                  &quot;Floor Plan&quot; / &quot;Main Level&quot;
+                </strong>{" "}
+                sheet, and dual-upload both the full PDF packet (for Gemini
+                multi-sheet decomposition) and a crisp{" "}
+                <code className="text-amber-300">2x</code> PNG floor plan for
+                the 2D Pin Mapper!
               </p>
 
               <label className="mt-4 flex flex-col items-center justify-center border-2 border-dashed border-amber-500/40 hover:border-amber-400 rounded-xl p-8 cursor-pointer bg-slate-900/50 transition">
                 <FileUp className="w-8 h-8 text-amber-400 mb-2" />
                 <span className="text-sm font-semibold text-white">
-                  Click to Upload Architectural Floor Plan (PDF, PNG, JPG)
+                  {uploading
+                    ? "Extracting 2x Floor-Plan PNG & Decomposing Packet..."
+                    : "Click to Upload Architectural Floor Plan (PDF, PNG, JPG)"}
                 </span>
                 <span className="text-xs text-slate-400 mt-1">
                   Supports multi-sheet architectural PDF sets & blueprint scans
@@ -379,9 +426,8 @@ export function PlanUploadWizard({
                   <span className="font-mono text-amber-300">
                     {parserMetadata?.modelUsed}
                   </span>{" "}
-                  — Review and tweak extracted rooms, dimensions, and CF8i wall
-                  classifications below before generating the full project
-                  schedule.
+                  {fullPdfPacketUrl &&
+                    `• Full PDF + 2x Floor-Plan PNG (${uploadedFileUrl}) uploaded`}
                 </div>
               </div>
             </div>
@@ -393,6 +439,16 @@ export function PlanUploadWizard({
               <Plus className="w-3.5 h-3.5" /> Add Room Row
             </button>
           </div>
+
+          {/* Multi-Page PDF Sheet Thumbnail Selector if uploaded file was a PDF */}
+          {pdfPagePreviews.length > 0 && (
+            <PdfSheetPicker
+              pages={pdfPagePreviews}
+              selectedPage={selectedPdfPageNum}
+              onSelectPage={handleSelectPdfSheetInWizard}
+              fileName={uploadedFileName}
+            />
+          )}
 
           {/* Project Metadata Row */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
@@ -600,7 +656,7 @@ export function PlanUploadWizard({
             </button>
             <button
               type="button"
-              disabled={creating}
+              disabled={creating || uploading}
               onClick={handleConfirmAndGenerateProject}
               className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20 flex items-center gap-2"
             >

@@ -14,7 +14,9 @@ export default function HomeownerCloseoutBinderPrintPage({
 
   useEffect(() => {
     // Request SUBCONTRACTOR role sanitizer so internal builder unit pricing & margins are omitted
-    fetch(`/api/projects/${id}?role=SUBCONTRACTOR`)
+    fetch(`/api/projects/${id}?role=SUBCONTRACTOR&_t=${Date.now()}`, {
+      cache: "no-store",
+    })
       .then((r) => r.json())
       .then((d) => setProject(d.project));
   }, [id]);
