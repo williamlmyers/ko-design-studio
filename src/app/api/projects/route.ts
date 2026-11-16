@@ -267,11 +267,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const trades = await prisma.tradeCategory.findMany();
-    const tradeMap: Record<string, string> = {};
-    for (const t of trades) {
-      tradeMap[t.slug] = t.id;
-    }
+    const tradeMap = await ensureSplitPlumbingAndRadiantTrades();
 
     const createdRoomsByName: Record<string, any> = {};
     let firstRoom: any = null;

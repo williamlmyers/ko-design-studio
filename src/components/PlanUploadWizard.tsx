@@ -34,6 +34,7 @@ export function PlanUploadWizard({
   const [step, setStep] = useState<"upload" | "staging">("upload");
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string>("");
   const [uploadedFileUrl, setUploadedFileUrl] = useState<string>("");
   const [fullPdfPacketUrl, setFullPdfPacketUrl] = useState<string>("");
   const [uploadedFileName, setUploadedFileName] = useState<string>("");
@@ -207,6 +208,7 @@ export function PlanUploadWizard({
 
   async function handleConfirmAndGenerateProject() {
     setCreating(true);
+    setCreateError("");
     try {
       const res = await fetch("/api/projects", {
         method: "POST",
@@ -227,7 +229,14 @@ export function PlanUploadWizard({
       const data = await res.json();
       if (data.projectId) {
         onProjectCreated(data.projectId);
+      } else {
+        setCreateError(
+          data.error ||
+            "Failed to create project in database. If running on Vercel, ensure PostgreSQL DATABASE_URL is configured."
+        );
       }
+    } catch (err: any) {
+      setCreateError(err?.message || "Network error while creating project.");
     } finally {
       setCreating(false);
     }
@@ -645,6 +654,12 @@ export function PlanUploadWizard({
               </tbody>
             </table>
           </div>
+
+          {createError && (
+            <div className="bg-red-500/15 border border-red-500/40 rounded-xl px-4 py-3 text-xs text-red-200">
+              <strong>Project Creation Error:</strong> {createError}
+            </div>
+          )}
 
           <div className="flex items-center justify-between pt-2">
             <button
