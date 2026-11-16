@@ -2,14 +2,44 @@ import { createClient } from "@supabase/supabase-js";
 import { promises as fs } from "fs";
 import path from "path";
 
-const BUCKET_NAME = "ko-builders-assets";
+const BUCKET_NAME = process.env.SUPABASE_STORAGE_BUCKET || "ko-builders-assets";
+
+let bucketVerifiedInProcess = false;
+
+function getSupabaseUrl(): string {
+  return process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+}
 
 export function isSupabaseStorageConfigured(): boolean {
+  const url = getSupabaseUrl();
   return Boolean(
-    process.env.SUPABASE_URL &&
+    url &&
       process.env.SUPABASE_SERVICE_ROLE_KEY &&
-      process.env.SUPABASE_URL.startsWith("http")
+      url.startsWith("http")
   );
+}
+
+export async function ensureSupabaseBucket(): Promise<void> {
+  if (!isSupabaseStorageConfigured() || bucketVerifiedInProcess) return;
+  try {
+    const supabase = createClient(
+      getSupabaseUrl(),
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data: existing } = await supabase.storage.getBucket(BUCKET_NAME);
+    if (!existing) {
+      await supabase.storage.createBucket(BUCKET_NAME, {
+        public: true,
+      });
+    } else if (!existing.public) {
+      await supabase.storage.updateBucket(BUCKET_NAME, {
+        public: true,
+      });
+    }
+    bucketVerifiedInProcess = true;
+  } catch {
+    // Ignore if bucket already exists
+  }
 }
 
 export function sanitizeFileName(name: string): string {
@@ -26,8 +56,9 @@ export async function createSignedUploadUrl(originalFileName: string): Promise<{
   const objectPath = `plans/${Date.now()}-${safeName}`;
 
   if (isSupabaseStorageConfigured()) {
+    await ensureSupabaseBucket();
     const supabase = createClient(
-      process.env.SUPABASE_URL!,
+      getSupabaseUrl(),
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
@@ -96,8 +127,9 @@ export async function uploadAsset(
 
   if (isSupabaseStorageConfigured()) {
     try {
+      await ensureSupabaseBucket();
       const supabase = createClient(
-        process.env.SUPABASE_URL!,
+        getSupabaseUrl(),
         process.env.SUPABASE_SERVICE_ROLE_KEY!
       );
       const objectPath = `renders/${Date.now()}-${safeName}`;
