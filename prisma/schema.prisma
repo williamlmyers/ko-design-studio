@@ -76,6 +76,7 @@ model Room {
 
   openings              WindowDoorOpening[]
   selections            SelectionItem[]
+  renders               RoomRender[]
 }
 
 model WindowDoorOpening {
@@ -219,4 +220,13 @@ model CatalogItem {
   pairedRoughInSku       String?
   pairedRoughInName      String?
   notes                  String?
+}
+
+model RoomRender {
+  id            String   @id @default(cuid())
+  roomId        String
+  room          Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  imageUrl      String
+  promptSummary String
+  createdAt     DateTime @default(now())
 }

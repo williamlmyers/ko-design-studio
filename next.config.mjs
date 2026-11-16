@@ -4,6 +4,11 @@ const nextConfig = {
     '/api/**/*': ['./src/generated/prisma/**/*'],
     '/*': ['./src/generated/prisma/**/*'],
   },
+  turbopack: {
+    resolveAlias: {
+      canvas: './src/lib/empty-canvas.js',
+    },
+  },
 };
 
 export default nextConfig;

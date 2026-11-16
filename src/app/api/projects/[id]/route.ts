@@ -31,6 +31,11 @@ export async function GET(
       where: { id },
       include: {
         rooms: {
+          include: {
+            renders: {
+              orderBy: { createdAt: "desc" },
+            },
+          },
           orderBy: { name: "asc" },
         },
         openings: {

@@ -186,6 +186,9 @@ export async function DELETE(
       prisma.windowDoorOpening.deleteMany({
         where: { roomId },
       }),
+      prisma.roomRender.deleteMany({
+        where: { roomId },
+      }),
       prisma.room.delete({
         where: { id: roomId },
       }),

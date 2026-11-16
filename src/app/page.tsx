@@ -33,6 +33,7 @@ import {
   Loader2,
   Trash2,
   ClipboardPaste,
+  Box,
 } from "lucide-react";
 import {
   PHASE_GATEWAYS,
@@ -45,6 +46,7 @@ import { WindowDoorSchedule } from "@/components/WindowDoorSchedule";
 import { PlanUploadWizard } from "@/components/PlanUploadWizard";
 import { ShowroomCatalogDrawer } from "@/components/ShowroomCatalogDrawer";
 import { UpdateProjectPlansModal } from "@/components/UpdateProjectPlansModal";
+import { House3DTourVisualizer } from "@/components/House3DTourVisualizer";
 import { getDefaultProductMedia } from "@/lib/product-media";
 import { uploadBlobViaStorageAdapter } from "@/lib/pdf-floorplan-extractor";
 
@@ -53,6 +55,7 @@ type ContextMode =
   | "TRADE_MATRIX"
   | "PHASE_TIMELINE"
   | "FLOOR_PLAN"
+  | "HOUSE_3D_TOUR"
   | "OPENING_SCHEDULE"
   | "CHANGE_ORDERS";
 
@@ -2580,6 +2583,18 @@ export default function KOPortalPage() {
             </button>
             <button
               type="button"
+              onClick={() => setContextMode("HOUSE_3D_TOUR")}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                contextMode === "HOUSE_3D_TOUR"
+                  ? "bg-amber-500 text-slate-950 shadow"
+                  : "text-slate-300 hover:bg-slate-800"
+              }`}
+            >
+              <Box className="w-3.5 h-3.5" />
+              3D Room & House Tour
+            </button>
+            <button
+              type="button"
               onClick={() => setContextMode("OPENING_SCHEDULE")}
               className={`px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
                 contextMode === "OPENING_SCHEDULE"
@@ -3133,7 +3148,26 @@ export default function KOPortalPage() {
         )}
 
         {/* Mode-Specific Views */}
-        {contextMode === "FLOOR_PLAN" && projectData ? (
+        {contextMode === "HOUSE_3D_TOUR" && projectData ? (
+          <House3DTourVisualizer
+            project={projectData}
+            rooms={projectData.rooms || []}
+            selections={projectData.selections || []}
+            openings={projectData.openings || []}
+            catalogPresets={catalogPresets}
+            catalogItems={catalogItems}
+            selectedRoomId={
+              selectedRoomId === "ALL"
+                ? (projectData.rooms || []).find(
+                    (r: any) => !r.name.toLowerCase().includes("exterior")
+                  )?.id || projectData.rooms?.[0]?.id
+                : selectedRoomId
+            }
+            onSelectRoom={(id) => setSelectedRoomId(id)}
+            onSelectionUpdated={() => loadProjectDetail(projectData.id)}
+            canEdit={!isSubcontractor}
+          />
+        ) : contextMode === "FLOOR_PLAN" && projectData ? (
           <FloorPlanCanvas
             project={projectData}
             rooms={projectData.rooms || []}
@@ -3287,21 +3321,33 @@ export default function KOPortalPage() {
             {/* Filter Bar + Bulk Room Approval Action */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2.5">
-                {/* Room Filter */}
-                <select
-                  value={selectedRoomId}
-                  onChange={(e) => setSelectedRoomId(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
-                >
-                  <option value="ALL">
-                    All Rooms ({projectData?.rooms?.length || 0})
-                  </option>
-                  {(projectData?.rooms || []).map((r: any) => (
-                    <option key={r.id} value={r.id}>
-                      Room: {r.name}
+                {/* Room Filter + Quick 3D Room Tour Button */}
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={selectedRoomId}
+                    onChange={(e) => setSelectedRoomId(e.target.value)}
+                    className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
+                  >
+                    <option value="ALL">
+                      All Rooms ({projectData?.rooms?.length || 0})
                     </option>
-                  ))}
-                </select>
+                    {(projectData?.rooms || []).map((r: any) => (
+                      <option key={r.id} value={r.id}>
+                        Room: {r.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={() => setContextMode("HOUSE_3D_TOUR")}
+                    className="px-3 py-2 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap transition"
+                    title="Open Interactive 3D Room & House Tour for this room"
+                  >
+                    <Box className="w-3.5 h-3.5" />
+                    3D Room & House Tour
+                  </button>
+                </div>
 
                 {/* Trade Filter + One-Click Copy Field Link when a Trade is active */}
                 <div className="flex items-center gap-1.5">

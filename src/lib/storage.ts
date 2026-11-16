@@ -84,6 +84,51 @@ export async function saveLocalUpload(
   };
 }
 
+export async function uploadAsset(
+  fileBuffer: Buffer,
+  originalFileName: string,
+  contentType = "image/svg+xml"
+): Promise<{
+  publicUrl: string;
+  mode: "supabase" | "local";
+}> {
+  const safeName = sanitizeFileName(originalFileName || "room-render.svg");
+
+  if (isSupabaseStorageConfigured()) {
+    try {
+      const supabase = createClient(
+        process.env.SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+      );
+      const objectPath = `renders/${Date.now()}-${safeName}`;
+      const { error } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(objectPath, fileBuffer, {
+          contentType,
+          upsert: true,
+        });
+
+      if (!error) {
+        const { data: pubData } = supabase.storage
+          .from(BUCKET_NAME)
+          .getPublicUrl(objectPath);
+        return {
+          publicUrl: pubData.publicUrl,
+          mode: "supabase",
+        };
+      }
+    } catch {
+      // Fall back to local storage
+    }
+  }
+
+  const saved = await saveLocalUpload(fileBuffer, safeName);
+  return {
+    publicUrl: saved.publicUrl,
+    mode: "local",
+  };
+}
+
 export async function readUploadedFileBytes(fileUrl: string): Promise<Buffer | null> {
   try {
     if (fileUrl.startsWith("/api/uploads/") || fileUrl.startsWith("/uploads/")) {
