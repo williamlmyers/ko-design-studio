@@ -7,6 +7,7 @@ import {
   getFramingContextNote,
   sanitizeProjectForRole,
 } from "@/lib/construction-rules";
+import { getDefaultProductMedia } from "@/lib/product-media";
 
 export async function GET(
   req: NextRequest,
@@ -74,9 +75,23 @@ export async function GET(
         project.interiorFramingType,
         sel.tradeCategory.slug
       );
+      const media = getDefaultProductMedia({
+        sku: sel.sku,
+        manufacturer: sel.manufacturer,
+        productName: sel.productName,
+        colorName: sel.colorName,
+        colorCode: sel.colorCode,
+        colorHex: sel.colorHex,
+        tradeSlug: sel.tradeCategory.slug,
+        swatchImageUrl: sel.swatchImageUrl,
+        productUrl: sel.productUrl,
+      });
 
       return {
         ...sel,
+        swatchImageUrl: media.swatchImageUrl,
+        productUrl: media.productUrl,
+        vendorName: media.vendorName,
         effectiveQty: financials.effectiveQty,
         extendedCost: financials.extendedCost,
         variance: financials.variance,

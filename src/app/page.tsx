@@ -27,6 +27,9 @@ import {
   Check,
   SlidersHorizontal,
   FileSpreadsheet,
+  Pencil,
+  Palette,
+  X,
 } from "lucide-react";
 import {
   PHASE_GATEWAYS,
@@ -45,6 +48,30 @@ type ContextMode =
   | "FLOOR_PLAN"
   | "OPENING_SCHEDULE"
   | "CHANGE_ORDERS";
+
+interface EditSpecFormState {
+  id: string;
+  componentName: string;
+  roomName: string;
+  tradeName: string;
+  status: string;
+  approvedByInitials: string | null;
+  approvedAt: string | null;
+  manufacturer: string;
+  productName: string;
+  sku: string;
+  colorName: string;
+  colorCode: string;
+  colorHex: string;
+  finish: string;
+  unitCost: number;
+  unitType: string;
+  isRadiantFloorApproved: boolean;
+  installNotes: string;
+  swatchImageUrl: string;
+  productUrl: string;
+  vendorName: string;
+}
 
 export default function KOPortalPage() {
   const [projects, setProjects] = useState<any[]>([]);
@@ -69,6 +96,10 @@ export default function KOPortalPage() {
   const [showPlanWizard, setShowPlanWizard] = useState<boolean>(false);
   const [showCustomEntryModal, setShowCustomEntryModal] =
     useState<boolean>(false);
+  const [editingSpec, setEditingSpec] = useState<EditSpecFormState | null>(
+    null
+  );
+  const [savingEditSpec, setSavingEditSpec] = useState<boolean>(false);
   const [expandedCommentsId, setExpandedCommentsId] = useState<string | null>(
     null
   );
@@ -178,6 +209,96 @@ export default function KOPortalPage() {
       body: JSON.stringify({ action: "apply_preset", presetId }),
     });
     await loadProjectDetail(projectData.id);
+  }
+
+  function openEditSpecModal(item: any) {
+    setEditingSpec({
+      id: item.id,
+      componentName: item.componentName || "",
+      roomName: item.room?.name || "",
+      tradeName: item.tradeCategory?.name || "",
+      status: item.status || "Option Selected",
+      approvedByInitials: item.approvedByInitials || null,
+      approvedAt: item.approvedAt || null,
+      manufacturer: item.manufacturer || "",
+      productName: item.productName || "",
+      sku: item.sku || "",
+      colorName: item.colorName || "",
+      colorCode: item.colorCode || "",
+      colorHex: item.colorHex || "#CBD5E1",
+      finish: item.finish || "Standard",
+      unitCost: Number(item.unitCost) || 0,
+      unitType: item.unitType || "each",
+      isRadiantFloorApproved: Boolean(item.isRadiantFloorApproved),
+      installNotes: item.installNotes || "",
+      swatchImageUrl: item.swatchImageUrl || "",
+      productUrl: item.productUrl || "",
+      vendorName: item.vendorName || item.manufacturer || "Vendor Direct",
+    });
+  }
+
+  async function handleUploadSpecPhoto(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !editingSpec) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (data?.publicUrl) {
+      setEditingSpec({
+        ...editingSpec,
+        swatchImageUrl: data.publicUrl,
+      });
+    }
+  }
+
+  async function handleUnlockInsideModal() {
+    if (!editingSpec || !projectData) return;
+    await fetch(`/api/selections/${editingSpec.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "unlock" }),
+    });
+    setEditingSpec({
+      ...editingSpec,
+      status: "Option Selected",
+      approvedByInitials: null,
+      approvedAt: null,
+    });
+    await loadProjectDetail(projectData.id);
+  }
+
+  async function handleSaveEditSpec(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingSpec || !projectData) return;
+    setSavingEditSpec(true);
+    try {
+      await fetch(`/api/selections/${editingSpec.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          manufacturer: editingSpec.manufacturer,
+          productName: editingSpec.productName,
+          sku: editingSpec.sku,
+          colorName: editingSpec.colorName,
+          colorCode: editingSpec.colorCode,
+          colorHex: editingSpec.colorHex,
+          finish: editingSpec.finish,
+          unitCost: Number(editingSpec.unitCost),
+          isRadiantFloorApproved: Boolean(editingSpec.isRadiantFloorApproved),
+          installNotes: editingSpec.installNotes,
+          swatchImageUrl: editingSpec.swatchImageUrl || null,
+          productUrl: editingSpec.productUrl || null,
+        }),
+      });
+      setEditingSpec(null);
+      await loadProjectDetail(projectData.id);
+    } finally {
+      setSavingEditSpec(false);
+    }
   }
 
   async function handleApproveAndLockItem(selectionId: string) {
@@ -412,6 +533,365 @@ export default function KOPortalPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      {/* Edit Spec / Custom Color Modal Overlay */}
+      {editingSpec && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <form
+            onSubmit={handleSaveEditSpec}
+            className="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-amber-400">
+                  <Palette className="w-4 h-4" />
+                  Selection Item Specification Detail & Custom Color
+                </div>
+                <h3 className="text-lg font-bold text-white mt-0.5">
+                  {editingSpec.componentName}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {editingSpec.roomName} • {editingSpec.tradeName}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {editingSpec.status === "Client Approved & Locked" &&
+                  isBuilderAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleUnlockInsideModal}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 font-semibold text-xs flex items-center gap-1.5 transition"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      Unlock Item
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  onClick={() => setEditingSpec(null)}
+                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {editingSpec.status === "Client Approved & Locked" && (
+              <div className="bg-emerald-500/10 border border-emerald-500/40 rounded-xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-emerald-300 font-medium">
+                  <Lock className="w-4 h-4 shrink-0" />
+                  <span>
+                    Status: <strong>Client Approved & Locked</strong>{" "}
+                    {editingSpec.approvedByInitials &&
+                      `(Signed by ${editingSpec.approvedByInitials})`}
+                  </span>
+                </div>
+                {isBuilderAdmin && (
+                  <button
+                    type="button"
+                    onClick={handleUnlockInsideModal}
+                    className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-amber-500/40 text-amber-300 font-semibold text-[11px] flex items-center gap-1"
+                  >
+                    <Unlock className="w-3 h-3" />
+                    Unlock Item
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="relative w-24 h-20 rounded-xl overflow-hidden border border-slate-700 bg-slate-900 shrink-0">
+                  {editingSpec.swatchImageUrl && (
+                    <img
+                      src={editingSpec.swatchImageUrl}
+                      alt={editingSpec.productName}
+                      className="w-full h-full object-cover"
+                    />
+                  )}
+                  <span
+                    className="absolute bottom-1 right-1 w-5 h-5 rounded-md border border-slate-900 shadow"
+                    style={{
+                      backgroundColor: editingSpec.colorHex || "#CBD5E1",
+                    }}
+                  />
+                </div>
+                <div className="space-y-1 text-xs">
+                  <div className="font-bold text-white">
+                    {editingSpec.manufacturer} — {editingSpec.productName}
+                  </div>
+                  <div className="text-slate-400">
+                    Sourced via:{" "}
+                    <strong className="text-amber-300">
+                      {editingSpec.vendorName}
+                    </strong>
+                  </div>
+                  {editingSpec.productUrl && (
+                    <a
+                      href={editingSpec.productUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 font-semibold underline"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      Open Supplier / Manufacturer Product Page
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              <label className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-amber-300 cursor-pointer flex items-center gap-1.5">
+                <FilePlus2 className="w-3.5 h-3.5" />
+                Upload Product Photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleUploadSpecPhoto}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Manufacturer
+                </label>
+                <input
+                  required
+                  value={editingSpec.manufacturer}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      manufacturer: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Product Name / Series
+                </label>
+                <input
+                  required
+                  value={editingSpec.productName}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      productName: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Model / SKU
+                </label>
+                <input
+                  required
+                  value={editingSpec.sku}
+                  onChange={(e) =>
+                    setEditingSpec({ ...editingSpec, sku: e.target.value })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Finish / Sheen
+                </label>
+                <input
+                  value={editingSpec.finish}
+                  onChange={(e) =>
+                    setEditingSpec({ ...editingSpec, finish: e.target.value })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Color Name
+                </label>
+                <input
+                  value={editingSpec.colorName}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      colorName: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Color Code / Paint Formula
+                </label>
+                <input
+                  placeholder="e.g. SW 7008 / NW-104"
+                  value={editingSpec.colorCode}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      colorCode: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Live Swatch Color Picker (colorHex)
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={editingSpec.colorHex || "#CBD5E1"}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        colorHex: e.target.value,
+                      })
+                    }
+                    className="w-10 h-9 rounded-lg bg-slate-950 border border-slate-700 cursor-pointer"
+                  />
+                  <input
+                    value={editingSpec.colorHex}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        colorHex: e.target.value,
+                      })
+                    }
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Unit Cost ($ per {editingSpec.unitType})
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editingSpec.unitCost}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      unitCost: Number(e.target.value),
+                    })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono focus:border-amber-400 outline-none"
+                />
+              </div>
+
+              <div className="md:col-span-2 bg-slate-950/90 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-white flex items-center gap-1.5">
+                    <Flame className="w-3.5 h-3.5 text-orange-400" />
+                    Hydronic Radiant Concrete Slab Approved
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    Uncheck if material exceeds thermal resistance R-value limit
+                    over radiant slab zones
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={editingSpec.isRadiantFloorApproved}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      isRadiantFloorApproved: e.target.checked,
+                    })
+                  }
+                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                />
+              </div>
+
+              <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Sourcing / Vendor Product Link (productUrl)
+                  </label>
+                  <input
+                    placeholder="https://www.brizo.com/..."
+                    value={editingSpec.productUrl}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        productUrl: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-400 block mb-1 font-medium">
+                    Product Photo / Swatch Image URL (swatchImageUrl)
+                  </label>
+                  <input
+                    placeholder="https://... or /api/uploads/..."
+                    value={editingSpec.swatchImageUrl}
+                    onChange={(e) =>
+                      setEditingSpec({
+                        ...editingSpec,
+                        swatchImageUrl: e.target.value,
+                      })
+                    }
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="text-slate-400 block mb-1 font-medium">
+                  Installation & Field Specification Notes
+                </label>
+                <textarea
+                  rows={3}
+                  value={editingSpec.installNotes}
+                  onChange={(e) =>
+                    setEditingSpec({
+                      ...editingSpec,
+                      installNotes: e.target.value,
+                    })
+                  }
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:border-amber-400 outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setEditingSpec(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingEditSpec}
+                className="px-5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-lg shadow-amber-500/20"
+              >
+                {savingEditSpec
+                  ? "Saving Specification..."
+                  : "Save Spec & Recalculate Variance"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Top Navigation & Demo Role Switcher Bar */}
       <header className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 lg:px-8 py-3">
         <div className="max-w-[1600px] mx-auto flex flex-wrap items-center justify-between gap-4">
@@ -1311,7 +1791,9 @@ export default function KOPortalPage() {
                   onChange={(e) => setSelectedRoomId(e.target.value)}
                   className="bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white"
                 >
-                  <option value="ALL">All Rooms ({projectData?.rooms?.length || 0})</option>
+                  <option value="ALL">
+                    All Rooms ({projectData?.rooms?.length || 0})
+                  </option>
                   {(projectData?.rooms || []).map((r: any) => (
                     <option key={r.id} value={r.id}>
                       Room: {r.name}
@@ -1529,19 +2011,40 @@ export default function KOPortalPage() {
 
                     {/* Main Body Grid */}
                     <div className="mt-4 grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
-                      {/* Swatch + Product Spec (5 Cols) */}
+                      {/* Product Photo + Swatch + Product Spec (5 Cols) */}
                       <div className="lg:col-span-5 flex items-start gap-3.5">
-                        <div
-                          className="w-12 h-12 rounded-xl border border-slate-700 shrink-0 shadow-inner flex items-center justify-center text-[10px] font-mono font-bold text-slate-900"
-                          style={{
-                            backgroundColor: item.colorHex || "#CBD5E1",
-                          }}
-                          title={`Color Swatch: ${item.colorName} (${item.colorCode})`}
+                        <button
+                          type="button"
+                          disabled={isSubcontractor}
+                          onClick={() => !isSubcontractor && openEditSpecModal(item)}
+                          className="relative w-24 h-20 rounded-xl border border-slate-700 bg-slate-950 shrink-0 shadow-md overflow-hidden group hover:border-amber-400 transition"
+                          title={`Click to view/edit product photo & spec: ${item.productName}`}
                         >
-                          {item.colorCode?.slice(0, 6)}
-                        </div>
-                        <div className="space-y-1">
-                          <h4 className="text-sm font-bold text-white">
+                          {item.swatchImageUrl ? (
+                            <img
+                              src={item.swatchImageUrl}
+                              alt={item.productName}
+                              className="w-full h-full object-cover group-hover:scale-105 transition"
+                            />
+                          ) : null}
+                          <span
+                            className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded border border-slate-900/80 text-[9px] font-mono font-bold text-slate-950 shadow"
+                            style={{
+                              backgroundColor: item.colorHex || "#CBD5E1",
+                            }}
+                          >
+                            {item.colorCode?.slice(0, 6) || "SWATCH"}
+                          </span>
+                        </button>
+                        <div className="space-y-1 min-w-0">
+                          <h4
+                            onClick={() => !isSubcontractor && openEditSpecModal(item)}
+                            className={`text-sm font-bold text-white ${
+                              !isSubcontractor
+                                ? "cursor-pointer hover:text-amber-300 transition"
+                                : ""
+                            }`}
+                          >
                             {item.componentName}
                           </h4>
                           <div className="text-xs text-slate-200 font-medium">
@@ -1560,15 +2063,23 @@ export default function KOPortalPage() {
                             <span>Finish: {item.finish}</span>
                           </div>
                           {item.productUrl && (
-                            <a
-                              href={item.productUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:underline"
-                            >
-                              <ExternalLink className="w-3 h-3" />
-                              View Clipped Product Spec Sheet
-                            </a>
+                            <div className="pt-0.5">
+                              <a
+                                href={item.productUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-[11px] font-medium text-sky-300 transition"
+                              >
+                                <ExternalLink className="w-3 h-3 shrink-0" />
+                                <span>
+                                  Sourced via{" "}
+                                  <strong>
+                                    {item.vendorName || item.manufacturer}
+                                  </strong>{" "}
+                                  — View Product Spec
+                                </span>
+                              </a>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -1662,31 +2173,43 @@ export default function KOPortalPage() {
                           </div>
                         )}
 
-                        {/* Catalog Preset Quick-Swap & Lock Controls */}
+                        {/* Catalog Preset Quick-Swap, Edit Spec / Custom Color, & Lock Controls */}
                         {!isSubcontractor && (
                           <div className="space-y-1.5">
-                            {!isLocked && matchingPresets.length > 0 && (
-                              <select
-                                defaultValue=""
-                                onChange={(e) =>
-                                  handleApplyPreset(item.id, e.target.value)
-                                }
-                                className="w-full bg-slate-950 border border-amber-500/40 rounded-lg px-2.5 py-1.5 text-[11px] text-amber-200"
-                              >
-                                <option value="" disabled>
-                                  ✨ Swap from Master Finish Catalog...
-                                </option>
-                                {matchingPresets.map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.manufacturer} — {p.productName} ($
-                                    {p.unitCost}/{p.unitType}){" "}
-                                    {p.isRadiantFloorApproved
-                                      ? "[Radiant OK]"
-                                      : "[Not Radiant OK]"}
+                            <div className="flex items-center gap-1.5">
+                              {!isLocked && matchingPresets.length > 0 && (
+                                <select
+                                  value=""
+                                  onChange={(e) =>
+                                    handleApplyPreset(item.id, e.target.value)
+                                  }
+                                  className="flex-1 min-w-0 bg-slate-950 border border-amber-500/40 rounded-lg px-2 py-1.5 text-[11px] text-amber-200"
+                                >
+                                  <option value="" disabled>
+                                    Swap from Master Finish Catalog...
                                   </option>
-                                ))}
-                              </select>
-                            )}
+                                  {matchingPresets.map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.manufacturer} — {p.productName} ($
+                                      {p.unitCost}/{p.unitType}){" "}
+                                      {p.isRadiantFloorApproved
+                                        ? "[Radiant OK]"
+                                        : "[Not Radiant OK]"}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => openEditSpecModal(item)}
+                                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-[11px] font-semibold text-amber-300 flex items-center gap-1 shrink-0 transition"
+                                title="Edit Spec / Custom Color"
+                              >
+                                <Pencil className="w-3 h-3" />
+                                Edit Spec / Custom Color
+                              </button>
+                            </div>
 
                             <div className="flex items-center gap-1.5">
                               {!isLocked ? (
@@ -1710,10 +2233,10 @@ export default function KOPortalPage() {
                                   <button
                                     type="button"
                                     onClick={() => handleUnlockItem(item.id)}
-                                    className="flex-1 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5"
+                                    className="flex-1 py-1.5 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300 font-semibold text-xs flex items-center justify-center gap-1.5 transition"
                                   >
                                     <Unlock className="w-3.5 h-3.5" />
-                                    Unlock Spec
+                                    Unlock Item
                                   </button>
                                 )
                               )}

@@ -47,6 +47,8 @@ export async function PATCH(
           isRadiantFloorApproved: preset.isRadiantFloorApproved,
           colorTempKelvin: preset.colorTempKelvin,
           installNotes: preset.installNotes,
+          swatchImageUrl: null,
+          productUrl: null,
           status: preset.isRadiantFloorApproved
             ? "Option Selected"
             : "Compatibility Warning",
@@ -82,9 +84,9 @@ export async function PATCH(
       return NextResponse.json({ ok: true, selection: updated });
     }
 
-    // General field update
+    // General field update (including Edit Spec / Custom Color modal)
     const updateData: Record<string, any> = {};
-    const directFields = [
+    const stringFields = [
       "componentName",
       "manufacturer",
       "productName",
@@ -96,27 +98,47 @@ export async function PATCH(
       "productUrl",
       "swatchImageUrl",
       "mountingHeight",
-      "isRadiantFloorApproved",
-      "isOwnerFurnished",
       "switchGroup",
       "dimmerType",
-      "colorTempKelvin",
       "installNotes",
-      "leadTimeWeeks",
       "unitType",
-      "takeoffQty",
-      "wasteFactorPct",
-      "unitCost",
-      "allowanceAmount",
       "status",
       "phaseGateway",
       "builderOverrideNote",
     ];
 
-    for (const f of directFields) {
+    for (const f of stringFields) {
       if (body[f] !== undefined) {
         updateData[f] = body[f];
       }
+    }
+
+    const numericFields = [
+      "leadTimeWeeks",
+      "takeoffQty",
+      "wasteFactorPct",
+      "unitCost",
+      "allowanceAmount",
+      "colorTempKelvin",
+    ];
+
+    for (const nf of numericFields) {
+      if (body[nf] !== undefined && body[nf] !== null && body[nf] !== "") {
+        updateData[nf] = Number(body[nf]);
+      }
+    }
+
+    if (body.isRadiantFloorApproved !== undefined) {
+      updateData.isRadiantFloorApproved = Boolean(body.isRadiantFloorApproved);
+      if (updateData.status === undefined) {
+        updateData.status = body.isRadiantFloorApproved
+          ? "Option Selected"
+          : "Compatibility Warning";
+      }
+    }
+
+    if (body.isOwnerFurnished !== undefined) {
+      updateData.isOwnerFurnished = Boolean(body.isOwnerFurnished);
     }
 
     if (body.targetInstallDate) {
